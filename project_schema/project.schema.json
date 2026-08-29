@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enterprise-snowflake.example/schemas/project.schema.json",
+  "title": "Enterprise Snowflake Data Project",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "name", "repository", "owner_team"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{1,31}$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^enterprise-snowflake-[a-z0-9-]+-analytics$"
+        },
+        "owner_team": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    }
+  }
+}
