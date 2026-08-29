@@ -3,7 +3,7 @@
     warehouse,
     target_lag,
     select_sql,
-    refresh_mode='INCREMENTAL',
+    refresh_mode='ADAPTIVE',
     initialize='ON_SCHEDULE'
 ) -%}
     {%- set mode = refresh_mode | upper -%}
@@ -11,7 +11,7 @@
     {%- if mode not in ['INCREMENTAL', 'FULL', 'ADAPTIVE'] -%}
         {{ exceptions.raise_compiler_error(
             'Dynamic Table SELECT projection refresh_mode must be INCREMENTAL, FULL, or ADAPTIVE; '
-            ~ 'AUTO is intentionally not a framework production default and CUSTOM_INCREMENTAL uses a different DML contract'
+            ~ 'AUTO is intentionally excluded from the production contract and CUSTOM_INCREMENTAL uses a different DML contract'
         ) }}
     {%- endif -%}
     {%- if initialization not in ['ON_CREATE', 'ON_SCHEDULE'] -%}
