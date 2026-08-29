@@ -9,6 +9,11 @@
 {% macro esf_configure_dataset(dataset_id) -%}
     {%- set dataset = enterprise_snowflake_framework.esf_dataset_metadata(dataset_id) -%}
     {%- set strategy = dataset.get('load_strategy') -%}
+    {%- set query_tag = dataset.get('query_tag') -%}
+
+    {%- if query_tag -%}
+        {%- do config(query_tag=query_tag) -%}
+    {%- endif -%}
 
     {%- if dataset.get('implementation', 'standard') == 'custom' -%}
         {{ exceptions.raise_compiler_error(
