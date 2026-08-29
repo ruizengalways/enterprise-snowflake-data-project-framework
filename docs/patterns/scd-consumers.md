@@ -1,16 +1,24 @@
 # Reusable SCD Consumer Patterns
 
-This framework treats SCD as a consumer of a declared capture contract. It never claims more history fidelity than the source provides.
+This framework treats SCD as a consumer of a declared capture contract. It never claims more history fidelity than the source provides, and it delegates CDC offsets, scheduling and run history to Snowflake when native primitives already own those concerns.
 
 ## Decision table
 
 | Capture fidelity | SCD1 | SCD2 baseline | History guarantee |
 | --- | --- | --- | --- |
-| current state / watermark | latest-by-key + MERGE | observed-version history only | only captured states |
-| net change | deterministic per-key MERGE | batch/observed history | intermediate source changes may already be lost |
-| full change / full event | deterministic per-key MERGE | affected-key event-history rebuild | full captured change history |
+| current state / watermark | latest-by-key current state | observed-version history only | only captured states |
+| net change | deterministic current state | batch/observed history | intermediate source changes may already be lost |
+| full change / full event | Dynamic Table or deterministic MERGE | Stream + Triggered Task + affected-key history rebuild | full captured change history |
 | full snapshot | current projection | transactional snapshot close + insert | snapshot-granularity history |
-| snapshot diff | MERGE derived I/U/D | consume derived diff or snapshot baseline | snapshot-granularity history |
+| snapshot diff | current-state apply | consume derived diff or snapshot baseline | snapshot-granularity history |
+
+## Snowflake-native split
+
+For current-state/SCD1 transformations over an append-preserved source, prefer a Snowflake Dynamic Table when the SQL can be expressed declaratively. Snowflake owns change tracking, scheduling and refresh recovery. `esf_scd1_dynamic_table_sql()` is only a thin DDL wrapper around that native object.
+
+For SCD2, use Streams + Tasks. Snowflake's current decision guide explicitly distinguishes SCD2 history from Dynamic Table current-state use cases. The framework therefore does **not** expose an SCD2 Dynamic Table wrapper.
+
+Classic SCD1 MERGE remains available when a project needs procedural DML semantics that a normal Dynamic Table SELECT does not express cleanly.
 
 ## Strategy and capture compatibility
 
@@ -20,11 +28,11 @@ The metadata validator rejects structurally misleading combinations rather than 
 - `scd2_stream_task` requires `full_change` or `full_event` fidelity and an append-preserved event capture archetype.
 - `scd2_merge` is the correctness-first batch baseline for ordered captured changes. Its history guarantee still depends on source fidelity: watermark/net-change inputs can only preserve changes that were actually captured.
 
-The implementation choice is downstream execution metadata; it does not redefine the source fidelity.
+The implementation choice is downstream execution metadata; it does not redefine source fidelity.
 
 ## SCD target lifecycle
 
-`esf_scd2_target_table_sql()` initializes a regular SCD2 history table from the payload/source table shape using `CREATE TABLE ... LIKE`, then adds the framework history columns:
+`esf_scd2_target_table_sql()` initializes a regular SCD2 history table from the payload/source table shape using `CREATE TABLE ... LIKE`, then adds:
 
 ```text
 _ESF_VALID_FROM
@@ -33,13 +41,31 @@ _ESF_IS_CURRENT
 _ESF_VERSION_ORDINAL
 ```
 
-This DDL is a setup/deployment action and must not be placed inside the DML transaction that consumes a Stream or advances a checkpoint. Schema evolution remains explicit and governed; the helper does not silently drop or coerce existing payload columns.
+This DDL is a setup/deployment action and must not be placed inside the DML transaction that consumes a Stream. Schema evolution remains explicit and governed.
 
-## SCD1 classic baseline
+## SCD1 native baseline
 
-`esf_scd1_merge_sql()` first collapses the incoming window to exactly one deterministic row per business key using source ordering, then performs the current-state MERGE. Tombstones can delete current rows.
+For append-preserved CDC/event sources, the preferred current-state path is:
 
-This is intentional: a direct MERGE with multiple source rows matching the same target key can be nondeterministic in Snowflake.
+```text
+immutable change/event table
+        ↓
+Dynamic Table
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY business key
+    ORDER BY source ordering DESC
+  ) = 1
+        ↓
+current state
+```
+
+`esf_scd1_dynamic_table_sql()` generates this pattern and defaults to `ADAPTIVE` refresh mode. This follows Snowflake's current recommendation for incrementalizable workloads while preserving an explicit override to `INCREMENTAL` or `FULL` when required.
+
+## SCD1 classic fallback
+
+`esf_scd1_merge_sql()` first collapses the incoming window to exactly one deterministic row per business key using source ordering, then performs current-state MERGE. Tombstones can delete current rows.
+
+Use this when procedural MERGE semantics are genuinely required. A direct MERGE with multiple source rows matching the same target key can be nondeterministic, so the deterministic collapse remains mandatory.
 
 ## SCD2 snapshot baseline
 
@@ -56,7 +82,7 @@ Delete handling is end-dating by default rather than inventing a tombstone paylo
 
 `esf_scd2_event_history_select()` derives intervals from immutable, ordered source events. It removes consecutive no-op states by record hash, retains delete boundaries, and emits non-delete historical versions.
 
-`esf_scd2_rebuild_affected_keys_sql()` then rebuilds only keys touched by the current batch:
+`esf_scd2_rebuild_affected_keys_sql()` rebuilds only keys touched by the current change set:
 
 ```text
 immutable event history
@@ -72,9 +98,9 @@ INSERT recomputed history
 COMMIT
 ```
 
-This is deliberately the default full-change SCD2 algorithm because it is retry-safe and naturally repairs late/out-of-order events as long as the immutable RAW event history is retained. It trades some recomputation for correctness. Very high-volume workloads may add a project-specific optimized fast path after proving identical invariants.
+This is the correctness-first full-change SCD2 algorithm because it is retry-safe and naturally repairs late/out-of-order events while immutable RAW history is retained.
 
-`effective_at_column` must be part of `order_columns`. Additional source position/sequence columns should be included to make ordering deterministic. If multiple real changes share the same timestamp, `_ESF_VERSION_ORDINAL` preserves their sequence even when timestamp validity boundaries are equal.
+`effective_at_column` must be part of `order_columns`. Additional source sequence/position columns make ordering deterministic. `_ESF_VERSION_ORDINAL` preserves ordering when multiple real changes share one timestamp.
 
 ## SCD2 Stream + Triggered Task baseline
 
@@ -83,37 +109,34 @@ For low-latency full-change/event workloads:
 ```text
 immutable event table
         ↓
-append-only Stream
+append-only Snowflake Stream
         ↓
 Triggered Task (NO_OVERLAP)
         ↓
 BEGIN TRANSACTION
-  INSERT OVERWRITE affected keys FROM stream
+  identify affected keys from Stream
   DELETE affected target history
   INSERT recomputed event history
 COMMIT
 ```
 
-`esf_scd2_stream_task_sql()` generates this pattern. Stream consumption and history replacement happen in the same transaction. If the task fails before commit, the DML transaction rolls back and the stream offset is not successfully advanced.
+Snowflake owns the Stream offset. The framework does not mirror that offset into `PLATFORM_CONTROL.PIPELINE_CHECKPOINT`.
 
-Each independent consumer must own its own stream. Do not share one stream between independent consumers.
+Within one explicit Snowflake transaction, repeatable-read Stream semantics allow multiple statements to see the same change set. The Stream offset advances only when the transaction successfully commits; rollback preserves the offset.
 
-## Optional Dynamic Table versions
+The task itself is the Snowflake scheduler. Retry, timeout, failure suspension and overlap behavior use native Task properties. `TASK_HISTORY` / `COMPLETE_TASK_GRAPHS` are the authoritative run history; do not duplicate each Task run into `PIPELINE_RUN`.
 
-Dynamic Tables are optional projections, never a platform requirement:
+Each independent consumer owns its own Stream.
 
-```text
-esf_scd1_dynamic_table_sql()
-esf_scd2_dynamic_table_sql()
-```
+## Snapshot diff is a fallback
 
-The caller must explicitly choose the Dynamic Table refresh mode. `AUTO` is not a framework production default.
+If the source is already a mutable Snowflake table, use a standard Stream and native `METADATA$ACTION`, `METADATA$ISUPDATE` and `METADATA$ROW_ID` rather than maintaining two snapshots and diffing them yourself.
 
-The equivalent classic implementation must always remain deployable. Window-heavy SCD2 definitions can be valid for incremental Dynamic Table refresh while still being expensive because changes can cause the affected business-key partitions to be recomputed. Benchmark the standalone SELECT and Dynamic Table refresh history before production adoption.
+`snapshot_diff` remains only for external interfaces that genuinely expose complete snapshots without preserved source CDC.
 
 ## Executable invariants
 
-The package exposes violation queries and dbt generic tests for the core structural invariants:
+The package exposes violation queries and dbt generic tests for structural invariants:
 
 ```text
 esf_scd2_multiple_current_violations_sql()
@@ -128,15 +151,15 @@ esf_scd2_no_overlaps
 esf_scd2_unique_version_ordinal
 ```
 
-Every SCD2 implementation should additionally test behavioral cases with deterministic fixtures:
+Every SCD2 implementation should additionally test deterministic behavioral fixtures:
 
 - duplicate replay is idempotent;
 - delete closes the active version;
 - reinsert after delete opens a new version;
 - late/out-of-order full-change event repairs history correctly;
-- equal timestamps are resolved by a deterministic source sequence/position;
-- checkpoint/stream advancement occurs only with successful target commit.
+- equal timestamps are resolved by deterministic source sequence/position;
+- Stream advancement occurs only with successful target commit.
 
 ## What metadata does not contain
 
-Metadata declares technical facts such as business key, capture fidelity, ordering identity and selected load strategy. It does not contain arbitrary MERGE SQL, task DAGs, business joins or executable branching. Those mechanics remain framework code or explicit project code.
+Metadata declares technical facts such as business key, capture fidelity, ordering identity and selected load strategy. It does not contain arbitrary MERGE SQL, task DAGs, business joins or executable branching. Those mechanics remain native Snowflake objects, framework code, or explicit project code depending on lifecycle ownership.
