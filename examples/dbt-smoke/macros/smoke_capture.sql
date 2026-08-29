@@ -41,6 +41,22 @@
 ) }}
     {%- endset -%}
 
+    {%- set task_history_sql -%}
+{{ enterprise_snowflake_framework.esf_task_history_sql(
+    'PROCESS_PATIENT_EVENT',
+    100,
+    false
+) }}
+    {%- endset -%}
+
+    {%- set task_graphs_sql -%}
+{{ enterprise_snowflake_framework.esf_complete_task_graphs_sql(
+    'PROCESS_PATIENT_EVENT',
+    100,
+    false
+) }}
+    {%- endset -%}
+
     {%- set checkpoint_read_sql -%}
 {{ enterprise_snowflake_framework.esf_checkpoint_read_sql(
     'HEALTH',
@@ -60,12 +76,28 @@
 ) }}
     {%- endset -%}
 
-    {%- set freshness_sql -%}
-{{ enterprise_snowflake_framework.esf_freshness_check_sql(
+    {%- set native_freshness_schedule_sql -%}
+{{ enterprise_snowflake_framework.esf_native_dmf_schedule_sql(
     'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
-    'source_updated_at',
+    'TRIGGER_ON_CHANGES',
+    'TABLE'
+) }}
+    {%- endset -%}
+
+    {%- set native_freshness_dmf_sql -%}
+{{ enterprise_snowflake_framework.esf_native_freshness_dmf_sql(
+    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
     60,
-    120
+    120,
+    none,
+    'TABLE'
+) }}
+    {%- endset -%}
+
+    {%- set native_dmf_status_sql -%}
+{{ enterprise_snowflake_framework.esf_native_dmf_expectation_status_sql(
+    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
+    'TABLE'
 ) }}
     {%- endset -%}
 
@@ -213,9 +245,13 @@
         ~ '\n---SNAPSHOT_DIFF---\n' ~ diff_sql
         ~ '\n---APPEND_ONLY_STREAM---\n' ~ stream_sql
         ~ '\n---TRIGGERED_TASK---\n' ~ task_sql
+        ~ '\n---TASK_HISTORY---\n' ~ task_history_sql
+        ~ '\n---TASK_GRAPHS---\n' ~ task_graphs_sql
         ~ '\n---CHECKPOINT_READ---\n' ~ checkpoint_read_sql
         ~ '\n---CHECKPOINT_ADVANCE---\n' ~ checkpoint_advance_sql
-        ~ '\n---FRESHNESS---\n' ~ freshness_sql
+        ~ '\n---NATIVE_FRESHNESS_SCHEDULE---\n' ~ native_freshness_schedule_sql
+        ~ '\n---NATIVE_FRESHNESS_DMF---\n' ~ native_freshness_dmf_sql
+        ~ '\n---NATIVE_DMF_STATUS---\n' ~ native_dmf_status_sql
         ~ '\n---RECONCILIATION---\n' ~ reconciliation_sql
         ~ '\n---RUN_START---\n' ~ run_start_sql
         ~ '\n---RUN_FINISH---\n' ~ run_finish_sql
