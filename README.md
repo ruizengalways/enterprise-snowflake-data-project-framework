@@ -113,6 +113,40 @@ Metadata remains bounded technical metadata. It does **not** contain MERGE SQL, 
 
 See `docs/patterns/capture-archetypes.md`, `docs/patterns/source-capture-matrix.md` and platform ADR-031.
 
+## Pipeline-pattern coverage audit
+
+The framework has been mapped against the wider batch/incremental/CDC/event pattern catalogue in `ruizengalways/data-engineering-cheetsheet`.
+
+The framework supports the same reasoning chain:
+
+```text
+data semantics
+  -> capture / delivery
+  -> cursor / checkpoint
+  -> RAW meaning
+  -> downstream current/history/event meaning
+  -> fidelity / recovery
+```
+
+All fourteen catalogue patterns are representable at architecture level, and most already compose from the current capture/checkpoint/loading/SCD primitives. Important current limitations are intentionally explicit rather than hidden:
+
+```text
+truly keyless source contracts are not supported in v1
+soft-delete current rows do not yet have first-class column/value metadata
+full-change before/after/delta image capability is not explicit metadata
+safe initial snapshot -> incremental/CDC position handoff has no reusable contract yet
+advanced reconciliation, schema-evolution and replay/backfill workflows are incomplete
+project runtime access to shared PLATFORM_CONTROL state is not safely domain-scoped yet
+```
+
+A current-state row such as `is_deleted=true` remains a **watermark/current_state** pattern. A change-feed `DELETE`/tombstone event is `net_change` or `full_change` depending feed granularity. Do not collapse those concepts into one `tombstone` bucket.
+
+The canonical cross-repository support matrix is:
+
+```text
+enterprise-snowflake-platform-infra/docs/architecture/PIPELINE_PATTERN_COVERAGE.md
+```
+
 ## Snowflake-native first; Dynamic Tables optional
 
 Classic/native primitives are the reliability baseline:
@@ -153,6 +187,8 @@ PLATFORM_CONTROL.OPERATIONS.ADVANCE_PIPELINE_CHECKPOINT(...)
 ```
 
 Framework macros render the corresponding read/start/finish/check/reconciliation calls. Custom state is limited to information Snowflake does not already own; Stream offsets are not duplicated into a parallel custom offset ledger.
+
+Important: the SQL primitives exist, but end-to-end project-runtime authorization to shared `PLATFORM_CONTROL` state is not complete until the platform implements a domain-enforced operational access surface. See platform `docs/architecture/OPERATIONAL_CONTROL_ACCESS.md`.
 
 ## SCD consumers
 
@@ -260,10 +296,15 @@ enterprise-snowflake-platform-infra/docs/CURRENT_CONTEXT.md
 Do not add another abstraction merely because it is possible. Near-term growth should follow live DEV findings and real consumers, particularly:
 
 ```text
+domain-safe operational state access contract
+safe bootstrap/handoff for a real incremental/CDC source
 live runtime verification fixes
 rollback/recovery/backfill workflow templates
-operational evidence and promotion controls
+schema compatibility/evolution tooling when a real contract change needs it
+broader reconciliation only where real sources require it
 later ingestion adapter support after platform proof
 ```
+
+Do not add soft-delete/image/keyless metadata speculatively as a large DSL. Add the smallest validated field only when a real source requires reusable behavior.
 
 Do not add domain business logic here.
