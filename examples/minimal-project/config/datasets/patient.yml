@@ -3,7 +3,7 @@ dataset:
   id: patient
   owner_team: health-data
   raw_contract: contracts/raw/patient.yml
-  load_strategy: scd2_snapshot
+  load_strategy: scd2_merge
   implementation: standard
   business_key:
     - patient_id
