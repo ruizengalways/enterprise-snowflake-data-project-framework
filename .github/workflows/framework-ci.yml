@@ -54,3 +54,55 @@ jobs:
             --run-id "${GITHUB_RUN_ID}" \
             --git-sha "${GITHUB_SHA}" \
             --as-sql
+
+      - name: Smoke-test target resolver
+        run: |
+          python scripts/resolve_dbt_target.py \
+            --project-code HEALTH \
+            --environment ci \
+            --workload ci \
+            --pr-number 123
+
+  dbt-smoke:
+    name: dbt 1.12 target resolution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dbt.txt
+
+      - name: Install pinned dbt and framework
+        run: |
+          python -m pip install -r requirements-dbt.txt
+          python -m pip install -e .
+
+      - name: Resolve CI target
+        run: |
+          python scripts/resolve_dbt_target.py \
+            --project-code HEALTH \
+            --environment ci \
+            --workload ci \
+            --pr-number 123 \
+            --format env >> "$GITHUB_ENV"
+
+      - name: Install local dbt framework package
+        run: dbt deps --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
+
+      - name: Parse without connecting to Snowflake
+        run: dbt parse --no-partial-parse --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
+
+      - name: Assert manifest target
+        run: |
+          python scripts/assert_dbt_manifest.py \
+            --manifest examples/dbt-smoke/target/manifest.json \
+            --model example \
+            --database CI_HEALTH \
+            --schema PR_123_STAGING
