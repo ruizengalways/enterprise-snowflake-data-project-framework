@@ -158,22 +158,22 @@ jobs:
             --schema PR_123_STAGING \
             --pre-hook-contains "refresh_mode = INCREMENTAL"
 
-      - name: Compile classic capture queries without Snowflake connection
+      - name: Render classic capture SQL without querying Snowflake
         run: |
-          dbt compile --no-partial-parse \
-            --select smoke_capture_latest smoke_capture_snapshot_diff \
+          dbt run-operation smoke_capture_sql \
             --project-dir examples/dbt-smoke \
-            --profiles-dir examples/dbt-smoke
+            --profiles-dir examples/dbt-smoke \
+            | tee "${RUNNER_TEMP}/capture-render.txt"
 
       - name: Assert latest-observation SQL
         run: |
-          FILE=examples/dbt-smoke/target/compiled/esf_dbt_smoke/models/staging/smoke_capture_latest.sql
+          FILE="${RUNNER_TEMP}/capture-render.txt"
           grep -qi "qualify row_number() over" "$FILE"
           grep -qi '"source_sequence" desc' "$FILE"
 
       - name: Assert snapshot-diff SQL
         run: |
-          FILE=examples/dbt-smoke/target/compiled/esf_dbt_smoke/models/staging/smoke_capture_snapshot_diff.sql
+          FILE="${RUNNER_TEMP}/capture-render.txt"
           grep -qi "'INSERT' as _esf_change_type" "$FILE"
           grep -qi "'UPDATE' as _esf_change_type" "$FILE"
           grep -qi "'DELETE' as _esf_change_type" "$FILE"
