@@ -110,6 +110,10 @@ jobs:
             --project-dir examples/dbt-smoke \
             --profiles-dir examples/dbt-smoke \
             | tee "${RUNNER_TEMP}/capture-render.txt"
+          dbt run-operation smoke_scd2_behavior_fixture_sql \
+            --project-dir examples/dbt-smoke \
+            --profiles-dir examples/dbt-smoke \
+            | tee "${RUNNER_TEMP}/scd2-behavior-render.txt"
 
       - name: Assert Snowflake-native capture and orchestration
         shell: bash
@@ -177,3 +181,22 @@ jobs:
             echo "Stream SCD2 must use repeatable Stream reads, not a shared affected-key work table." >&2
             exit 1
           fi
+
+      - name: Assert deterministic SCD2 behavior oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="${RUNNER_TEMP}/scd2-behavior-render.txt"
+          grep -qi -- "---SCD2_BEHAVIOR_FIXTURE---" "$FILE"
+          grep -qi "from values" "$FILE"
+          grep -qi "alpha-v1" "$FILE"
+          grep -qi "bravo-v2" "$FILE"
+          grep -qi "charlie-v2" "$FILE"
+          grep -qi "lead(\"source_updated_at\")" "$FILE"
+          grep -qi "minus" "$FILE"
+          grep -qi "MISSING_EXPECTED" "$FILE"
+          grep -qi "UNEXPECTED_ACTUAL" "$FILE"
+          grep -qi "union all by name" "$FILE"
+          # Delete boundaries participate in ordering even though tombstones are
+          # not materialized as target history rows, so A's reinsert is ordinal 4.
+          grep -Eqi "\('A',[[:space:]]*'a3',[[:space:]]*50,.*true,[[:space:]]*4\)" "$FILE"
