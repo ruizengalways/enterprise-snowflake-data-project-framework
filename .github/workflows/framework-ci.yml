@@ -66,11 +66,14 @@ jobs:
           python -m pip install -r requirements-dbt.txt
           python -m pip install -e .
 
-      - name: Resolve CI target and parse offline
+      - name: Resolve CI target
         run: |
           python scripts/resolve_dbt_target.py \
             --project-code HEALTH --environment ci --workload ci --pr-number 123 \
             --format env >> "$GITHUB_ENV"
+
+      - name: Parse offline
+        run: |
           dbt deps --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
           dbt parse --no-partial-parse \
             --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
@@ -113,17 +116,11 @@ jobs:
         run: |
           set -euo pipefail
           FILE="${RUNNER_TEMP}/capture-render.txt"
-
-          # Snapshot diff remains a fallback for true external snapshots.
           grep -qi "'INSERT' as _esf_change_type" "$FILE"
           grep -qi "'UPDATE' as _esf_change_type" "$FILE"
           grep -qi "'DELETE' as _esf_change_type" "$FILE"
-
-          # Mutable Snowflake source -> standard Stream.
           grep -qi "create stream if not exists CI_HEALTH.PR_123_STAGING.PATIENT_CURRENT_STREAM" "$FILE"
           grep -qi "append_only = false" "$FILE"
-
-          # Immutable events -> append-only Stream.
           grep -qi "create stream if not exists CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"
           grep -qi "append_only = true" "$FILE"
           grep -qi "show_initial_rows = false" "$FILE"
@@ -131,15 +128,11 @@ jobs:
             echo "Routine deployment must not ALTER/replace an offset-bearing Stream." >&2
             exit 1
           fi
-
-          # Snowflake Triggered Task owns scheduling/retry/overlap.
           grep -qi "create or alter task CI_HEALTH.PR_123_STAGING.PROCESS_PATIENT_EVENT" "$FILE"
           grep -qi "system\$stream_has_data('CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM')" "$FILE"
           grep -qi "task_auto_retry_attempts = 1" "$FILE"
           grep -qi "suspend_task_after_num_failures = 3" "$FILE"
           grep -qi "overlap_policy = NO_OVERLAP" "$FILE"
-
-          # Snowflake owns Task run history.
           grep -qi "information_schema.task_history" "$FILE"
           grep -qi "information_schema.complete_task_graphs" "$FILE"
 
@@ -148,20 +141,14 @@ jobs:
         run: |
           set -euo pipefail
           FILE="${RUNNER_TEMP}/capture-render.txt"
-
-          # Native Data Quality Monitoring for supported standard checks.
           grep -qi "data_metric_schedule = 'TRIGGER_ON_CHANGES'" "$FILE"
           grep -qi "snowflake.core.freshness" "$FILE"
           grep -qi "expectation freshness_warn (value <= 3600)" "$FILE"
           grep -qi "freshness_error (value <= 7200)" "$FILE"
           grep -qi "snowflake.local.data_quality_monitoring_expectation_status" "$FILE"
-
-          # Cross-table reconciliation remains explicit SQL.
           grep -qi "count(distinct" "$FILE"
           grep -qi "min_source_timestamp" "$FILE"
           grep -qi "max_source_timestamp" "$FILE"
-
-          # PLATFORM_CONTROL checkpoint/run state is only for external ownership.
           grep -qi "from PLATFORM_CONTROL.OPERATIONS.PIPELINE_CHECKPOINT" "$FILE"
           grep -qi "call PLATFORM_CONTROL.OPERATIONS.ADVANCE_PIPELINE_CHECKPOINT" "$FILE"
           grep -qi "merge into PLATFORM_CONTROL.OPERATIONS.PIPELINE_RUN" "$FILE"
@@ -173,19 +160,13 @@ jobs:
         run: |
           set -euo pipefail
           FILE="${RUNNER_TEMP}/capture-render.txt"
-
-          # SCD1: native Dynamic Table path plus deterministic classic fallback.
           grep -qi "create or alter dynamic table CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT_DT" "$FILE"
           grep -qi "refresh_mode = ADAPTIVE" "$FILE"
           grep -qi "merge into CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT" "$FILE"
-
-          # Full-change and snapshot SCD2 remain explicit history logic.
           grep -qi "_esf_version_ordinal" "$FILE"
           grep -qi "lead(\"source_updated_at\")" "$FILE"
           grep -qi "update CI_HEALTH.PR_123_CANONICAL.PATIENT_SNAPSHOT_HISTORY" "$FILE"
           grep -qi "_esf_is_current = false" "$FILE"
-
-          # Low-latency SCD2 uses one native Stream repeatedly inside one transaction.
           grep -qi "create or alter task CI_HEALTH.PR_123_CANONICAL.PROCESS_PATIENT_HISTORY" "$FILE"
           grep -qi "delete from CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY" "$FILE"
           grep -qi "from CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"
