@@ -2,16 +2,16 @@
 
 This is the operator-facing map from common source shapes to the smaller reusable framework archetypes in `capture-archetypes.md`.
 
-In this framework, "Bronze" means the project-owned authoritative RAW evidence layer. A physical schema named `BRONZE` is not required.
+The canonical authoritative evidence layer is the project-owned **RAW contract**. This document does not introduce a separate Bronze/Silver physical-layer vocabulary.
 
-| # | Common source/capture | Framework capture | Source fidelity | Authoritative RAW evidence | Delete | Retry/lookback/idempotency | Classic Snowflake path | Silver SCD1 | Silver SCD2 | Optional Dynamic Table path |
+| # | Common source/capture | Framework capture | Source fidelity | Authoritative RAW evidence | Delete | Retry/lookback/idempotency | Classic Snowflake path | SCD1 | SCD2 guarantee | Optional Dynamic Table path |
 |---:|---|---|---|---|---|---|---|---|---|---|
-| 1 | Full Snapshot | `snapshot` | `current_state` | append complete snapshot batches with `snapshot_id`, `snapshot_at`, `batch_id`, record hash | inferred by N vs N-1 | `snapshot_id + business_key` | append snapshot -> snapshot diff/current table -> Task/dbt/MERGE | yes | snapshot-grain only | latest snapshot/current projection or declarative diff; snapshots remain normal tables |
+| 1 | Full Snapshot | `snapshot` | `current_state` | append complete snapshot batches with `snapshot_id`, `snapshot_at`, `batch_id`, record hash | inferred by N vs N-1 | `snapshot_id + business_key` | append snapshot -> snapshot diff/current projection -> Task/dbt/MERGE | yes | snapshot-grain only | latest snapshot/current projection or declarative diff; snapshots remain normal tables |
 | 2 | Incremental Watermark | `watermark` | `current_state` | append observed versions when replay matters; optional current projection | normally no | persisted watermark; dedupe `business_key + source timestamp/version` | read checkpoint -> source extract -> latest-by-key -> MERGE -> advance checkpoint | yes | observed changes only | latest-row/current projection after landed evidence |
 | 3 | Watermark + Lookback | `watermark` | `current_state` | same as #2, allowing overlap | normally no | start at `last_successful_watermark - lookback`; deterministic overlap dedupe | overlap extract -> latest-by-key -> MERGE -> advance high watermark only after success | yes | observed changes only | same as #2 |
 | 4 | Watermark + Tombstone | `net_change` | `net_change` | append observations + tombstones; optional current projection | explicit tombstone | source version/position + business key | append -> dedupe -> MERGE with matched DELETE/soft-delete -> checkpoint | yes | observed changes/deletes only | current projection possible; procedural delete path remains classic fallback |
 | 5 | Native CDC — Net Changes -> MERGE | `net_change` | `net_change` | append each capture window before current MERGE | explicit | CDC position + business key | append batch -> dedupe -> MERGE current | yes | net/batch history only | current-state declarative projection when appropriate |
-| 6 | Native CDC — Net Changes -> APPEND | `net_change` | `net_change` | append one observed final change per key/window | explicit | batch/source position + business key | append net-change evidence -> derive current with latest-by-key | yes | net/batch history, not full transaction history | latest-by-key SCD1 projection fits well if refresh economics are good |
+| 6 | Native CDC — Net Changes -> APPEND | `net_change` | `net_change` | append one observed final change per key/window | explicit | batch/source position + business key | append net-change evidence -> derive current with latest-by-key | yes | net/batch history, not full transaction history | latest-by-key current projection when refresh economics are good |
 | 7 | Native CDC — All/Full Changes | `full_change` | `full_change` | immutable ordered change events | explicit | LSN/sequence/event identity | append events -> append-only Stream -> triggered Task -> SCD1 MERGE / SCD2 processor | yes | full if source ordering/completeness reliable | current/SCD1 projection only; SCD2 stays classic |
 | 8 | Transaction Log CDC | `full_change` | `full_change` | immutable transaction-log events | explicit | LSN/SCN/log position | same as #7 | yes | full if log ordering reliable | same as #7 |
 | 9 | Debezium / Kafka CDC | `full_change` | `full_change` | immutable CDC envelope/events | explicit/source-defined | topic + partition + offset; source LSN where available | Snowpipe Streaming/Kafka landing later -> normal event table -> append-only Stream/Task | yes | full if ordered and complete | current/SCD1 projection after landed events |
@@ -37,7 +37,7 @@ Do not label net-change CDC as full history. If five source changes collapse int
 
 ### Full CDC/event
 
-Land immutable events before reducing them to current state. A Snowflake standard Stream is a net-delta offset over a Snowflake source object; it is not the authoritative source audit log.
+Land immutable events before reducing them to current state. A Snowflake Stream is an offset-based change consumer over a Snowflake source object; it is not the authoritative source audit log.
 
 ### Files
 
@@ -50,7 +50,7 @@ engine = classic     # mandatory implementation and break-glass path
 engine = dynamic     # optional for supported declarative current/projection logic
 ```
 
-Execution engine is an implementation/deployment choice, not a business contract. Switching between classic and Dynamic Table must not change RAW semantics or the published Silver contract.
+Execution engine is an implementation/deployment choice, not a business contract. Switching between classic and Dynamic Table must not change RAW semantics or the published downstream contract.
 
 ### Classic baseline
 
@@ -69,9 +69,9 @@ PLATFORM_CONTROL checkpoint state
 Use an explicit refresh mode in production. The framework wrapper currently allows:
 
 ```text
+ADAPTIVE
 INCREMENTAL
 FULL
-ADAPTIVE
 ```
 
 It intentionally does not silently default to `AUTO`. Dynamic Tables are not the framework's SCD2 implementation.
