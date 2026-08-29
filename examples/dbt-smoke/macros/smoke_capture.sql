@@ -35,6 +35,7 @@
     3600000,
     1,
     3,
+    'NO_OVERLAP',
     'Process immutable patient CDC events',
     true
 ) }}
@@ -154,6 +155,29 @@
 ) }}
     {%- endset -%}
 
+    {%- set scd2_stream_task_sql -%}
+{{ enterprise_snowflake_framework.esf_scd2_stream_task_sql(
+    'CI_HEALTH.PR_123_CANONICAL.PROCESS_PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM',
+    'CI_HEALTH.PR_123_STAGING.PATIENT_AFFECTED_KEYS',
+    'CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
+    'WH_HEALTH_CI',
+    ['patient_id'],
+    'source_updated_at',
+    ['source_updated_at', 'source_sequence'],
+    'record_hash',
+    'op',
+    ['D'],
+    30,
+    3600000,
+    1,
+    3,
+    'Transactional SCD2 stream consumer',
+    false
+) }}
+    {%- endset -%}
+
     {{ log(
         '---LATEST---\n' ~ latest_sql
         ~ '\n---SNAPSHOT_DIFF---\n' ~ diff_sql
@@ -168,7 +192,8 @@
         ~ '\n---SCD1---\n' ~ scd1_sql
         ~ '\n---SCD2_HISTORY---\n' ~ scd2_history_sql
         ~ '\n---SCD2_REBUILD---\n' ~ scd2_rebuild_sql
-        ~ '\n---SCD2_SNAPSHOT---\n' ~ scd2_snapshot_sql,
+        ~ '\n---SCD2_SNAPSHOT---\n' ~ scd2_snapshot_sql
+        ~ '\n---SCD2_STREAM_TASK---\n' ~ scd2_stream_task_sql,
         info=true
     ) }}
     {{ return('capture SQL rendered') }}
