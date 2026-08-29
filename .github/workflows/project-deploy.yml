@@ -4,23 +4,23 @@ on:
   workflow_call:
     inputs:
       project_code:
-        description: Uppercase domain/project code, for example HEALTH.
+        description: "Uppercase domain/project code, for example HEALTH."
         required: true
         type: string
       environment:
-        description: Target Snowflake environment: dev, uat, or prod.
+        description: "Target Snowflake environment: dev, uat, or prod."
         required: true
         type: string
       git_sha:
-        description: Immutable 40-character project Git commit SHA to deploy.
+        description: "Immutable 40-character project Git commit SHA to deploy."
         required: true
         type: string
       framework_ref:
-        description: Immutable 40-character framework Git commit SHA used by deployment tooling.
+        description: "Immutable 40-character framework Git commit SHA used by deployment tooling."
         required: true
         type: string
       project_dir:
-        description: dbt project directory inside the calling repository.
+        description: "dbt project directory inside the calling repository."
         required: false
         default: dbt
         type: string
