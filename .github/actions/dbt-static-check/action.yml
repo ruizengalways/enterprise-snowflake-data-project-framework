@@ -1,5 +1,5 @@
 name: Validate Enterprise Snowflake dbt Project
-description: Install pinned dbt versions, resolve a CI target, render validated metadata vars, install packages, and parse without Snowflake.
+description: Install pinned dbt versions, resolve canonical CI context, validate metadata, install packages, and parse without Snowflake.
 
 inputs:
   project-code:
@@ -29,7 +29,7 @@ runs:
         python -m pip install -r "${FRAMEWORK_ROOT}/requirements-dbt.txt"
         python -m pip install "${FRAMEWORK_ROOT}"
 
-    - name: Resolve offline CI target
+    - name: Resolve canonical offline CI context
       shell: bash
       run: |
         FRAMEWORK_ROOT="$(cd "${GITHUB_ACTION_PATH}/../../.." && pwd)"
@@ -39,21 +39,17 @@ runs:
           echo "SNOWFLAKE_TOKEN=dummy_token"
           echo "DBT_AUTHENTICATOR=workload_identity"
         } >> "$GITHUB_ENV"
-        python "${FRAMEWORK_ROOT}/scripts/resolve_dbt_target.py" \
+        python "${FRAMEWORK_ROOT}/scripts/render_dbt_context.py" \
+          --project-root "${GITHUB_WORKSPACE}/${{ inputs.project-root }}" \
+          --schema-dir "${FRAMEWORK_ROOT}/project_schema" \
           --project-code "${{ inputs.project-code }}" \
           --environment ci \
           --workload ci \
           --pr-number 1 \
-          --format env >> "$GITHUB_ENV"
-
-    - name: Render validated project metadata for dbt
-      shell: bash
-      run: |
-        FRAMEWORK_ROOT="$(cd "${GITHUB_ACTION_PATH}/../../.." && pwd)"
-        python "${FRAMEWORK_ROOT}/scripts/render_dbt_vars.py" \
-          --project-root "${GITHUB_WORKSPACE}/${{ inputs.project-root }}" \
-          --schema-dir "${FRAMEWORK_ROOT}/project_schema" \
-          > "${RUNNER_TEMP}/esf-dbt-vars.json"
+          --run-id "${GITHUB_RUN_ID}" \
+          --git-sha "${GITHUB_SHA}" \
+          --env-file "$GITHUB_ENV" \
+          --vars-file "${RUNNER_TEMP}/esf-dbt-vars.json"
 
     - name: Install dbt packages
       shell: bash
