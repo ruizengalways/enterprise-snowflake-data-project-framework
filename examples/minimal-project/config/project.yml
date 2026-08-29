@@ -1,0 +1,6 @@
+schema_version: 1
+project:
+  code: HEALTH
+  name: Health Analytics
+  repository: enterprise-snowflake-health-analytics
+  owner_team: health-data
