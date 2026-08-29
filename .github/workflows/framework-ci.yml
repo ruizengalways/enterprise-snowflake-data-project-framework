@@ -45,6 +45,34 @@ jobs:
           python scripts/resolve_dbt_target.py \
             --project-code HEALTH --environment ci --workload ci --pr-number 123
 
+      - name: Assert reusable delivery security contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPLOY=.github/workflows/project-deploy.yml
+          PR=.github/workflows/pr-workspace.yml
+
+          grep -Fq 'Load approved Snowflake environment configuration' "$DEPLOY"
+          grep -Fq 'ESF_SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}' "$DEPLOY"
+          grep -Fq 'ESF_SNOWFLAKE_OIDC_AUDIENCE: ${{ vars.SNOWFLAKE_OIDC_AUDIENCE }}' "$DEPLOY"
+          grep -Fq 'fetch-depth: 0' "$DEPLOY"
+          grep -Fq 'merge-base --is-ancestor' "$DEPLOY"
+          grep -Fq 'git -C project checkout --detach' "$DEPLOY"
+          grep -Fq 'Project dbt package must pin enterprise-snowflake-data-project-framework to the same framework_ref.' "$DEPLOY"
+          if sed -n '/^    env:/,/^    steps:/p' "$DEPLOY" | grep -Fq 'SNOWFLAKE_ACCOUNT'; then
+            echo "Deployment workflow must load environment-level Snowflake variables after the protected environment job starts." >&2
+            exit 1
+          fi
+
+          grep -Fq 'Load approved Snowflake environment configuration' "$PR"
+          grep -Fq 'ESF_SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}' "$PR"
+          grep -Fq 'framework_ref must be a full lowercase 40-character immutable Git commit SHA' "$PR"
+          grep -Fq 'Framework checkout does not match requested framework_ref.' "$PR"
+          if sed -n '/^    env:/,/^    steps:/p' "$PR" | grep -Fq 'SNOWFLAKE_ACCOUNT'; then
+            echo "PR workflow must load environment-level Snowflake variables after the protected environment job starts." >&2
+            exit 1
+          fi
+
   dbt-smoke:
     name: dbt 1.12 native Snowflake and SCD contracts
     runs-on: ubuntu-latest
