@@ -18,6 +18,22 @@ _KEYED_STRATEGIES = {
     "scd2_merge",
     "scd2_stream_task",
 }
+_CAPTURE_FIDELITY = {
+    "snapshot": {"current_state"},
+    "watermark": {"current_state"},
+    "net_change": {"net_change"},
+    "full_change": {"full_change", "full_event"},
+    "snapshot_diff": {"net_change"},
+    "cursor_or_file": {"current_state", "net_change", "full_change", "full_event"},
+}
+_CAPTURE_CHECKPOINTS = {
+    "snapshot": {"snapshot_id"},
+    "watermark": {"watermark"},
+    "net_change": {"watermark", "cursor", "source_position", "event_offset"},
+    "full_change": {"cursor", "source_position", "event_offset"},
+    "snapshot_diff": {"snapshot_id"},
+    "cursor_or_file": {"cursor", "file_identity", "source_position", "event_offset"},
+}
 
 
 class MetadataValidationError(ValueError):
@@ -75,6 +91,52 @@ def validate_raw_contract(document: dict[str, Any], path: Path) -> list[str]:
                 errors.append(f"{path}: CDC contract requires change_semantics.{field}")
             elif column not in column_names:
                 errors.append(f"{path}: {field} column is not declared: {column}")
+
+    capture = contract.get("capture")
+    if capture:
+        archetype = capture["archetype"]
+        fidelity = capture["fidelity"]
+        checkpoint_kind = capture["checkpoint_kind"]
+
+        if fidelity not in _CAPTURE_FIDELITY[archetype]:
+            allowed = ", ".join(sorted(_CAPTURE_FIDELITY[archetype]))
+            errors.append(
+                f"{path}: capture archetype {archetype} does not support fidelity {fidelity}; allowed: {allowed}"
+            )
+
+        if checkpoint_kind not in _CAPTURE_CHECKPOINTS[archetype]:
+            allowed = ", ".join(sorted(_CAPTURE_CHECKPOINTS[archetype]))
+            errors.append(
+                f"{path}: capture archetype {archetype} does not support checkpoint_kind {checkpoint_kind}; "
+                f"allowed: {allowed}"
+            )
+
+        lookback = capture.get("lookback_minutes")
+        if lookback is not None and archetype != "watermark":
+            errors.append(f"{path}: capture.lookback_minutes is valid only for watermark archetype")
+
+        for field in ("ordering_columns", "idempotency_columns"):
+            undeclared = [name for name in capture.get(field, []) if name not in column_names]
+            if undeclared:
+                errors.append(f"{path}: capture.{field} columns are not declared: {', '.join(undeclared)}")
+
+        if archetype == "watermark" and not source_timestamp and not capture.get("ordering_columns"):
+            errors.append(
+                f"{path}: watermark capture requires contract.source_timestamp or capture.ordering_columns"
+            )
+
+        if archetype == "full_change":
+            if not capture.get("ordering_columns") and not changes.get("sequence_column"):
+                errors.append(
+                    f"{path}: full_change capture requires capture.ordering_columns or change_semantics.sequence_column"
+                )
+            if not capture.get("idempotency_columns"):
+                errors.append(f"{path}: full_change capture requires capture.idempotency_columns")
+
+        if archetype == "snapshot_diff" and changes.get("delete_semantics") != "inferred_snapshot_diff":
+            errors.append(
+                f"{path}: snapshot_diff capture requires change_semantics.delete_semantics=inferred_snapshot_diff"
+            )
 
     return errors
 
