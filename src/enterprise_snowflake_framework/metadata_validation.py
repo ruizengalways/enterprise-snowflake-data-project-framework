@@ -18,6 +18,11 @@ _KEYED_STRATEGIES = {
     "scd2_merge",
     "scd2_stream_task",
 }
+_SCD2_STRATEGIES = {
+    "scd2_snapshot",
+    "scd2_merge",
+    "scd2_stream_task",
+}
 _CAPTURE_FIDELITY = {
     "snapshot": {"current_state"},
     "watermark": {"current_state"},
@@ -149,6 +154,41 @@ def validate_raw_contract(document: dict[str, Any], path: Path) -> list[str]:
     return errors
 
 
+def validate_strategy_capture_compatibility(
+    dataset: dict[str, Any],
+    contract: dict[str, Any],
+    path: Path,
+) -> list[str]:
+    strategy = dataset["load_strategy"]
+    if strategy not in _SCD2_STRATEGIES:
+        return []
+
+    capture = contract.get("capture")
+    if not capture:
+        return [f"{path}: load_strategy {strategy} requires raw contract capture metadata"]
+
+    archetype = capture["archetype"]
+    fidelity = capture["fidelity"]
+    errors: list[str] = []
+
+    if strategy == "scd2_snapshot" and archetype != "snapshot":
+        errors.append(
+            f"{path}: load_strategy scd2_snapshot requires capture.archetype=snapshot; got {archetype}"
+        )
+
+    if strategy == "scd2_stream_task":
+        if fidelity not in {"full_change", "full_event"}:
+            errors.append(
+                f"{path}: load_strategy scd2_stream_task requires capture fidelity full_change/full_event; got {fidelity}"
+            )
+        if archetype not in {"full_change", "cursor_or_file"}:
+            errors.append(
+                f"{path}: load_strategy scd2_stream_task requires an append-preserved event capture archetype; got {archetype}"
+            )
+
+    return errors
+
+
 def validate_dataset(
     document: dict[str, Any],
     path: Path,
@@ -180,7 +220,16 @@ def validate_dataset(
     contract_schema_errors = schema_errors(contract_document, raw_schema, contract_path)
     errors.extend(contract_schema_errors)
     if not contract_schema_errors:
-        errors.extend(validate_raw_contract(contract_document, contract_path))
+        raw_errors = validate_raw_contract(contract_document, contract_path)
+        errors.extend(raw_errors)
+        if not raw_errors:
+            errors.extend(
+                validate_strategy_capture_compatibility(
+                    dataset,
+                    contract_document["contract"],
+                    path,
+                )
+            )
 
     return errors
 
