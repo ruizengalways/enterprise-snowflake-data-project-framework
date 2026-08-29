@@ -1,0 +1,37 @@
+schema_version: 1
+contract:
+  source_system: ehr_mssql
+  entity: patient
+  grain: one row per source-system patient identifier and source change
+  business_key:
+    - patient_id
+  source_timestamp: source_updated_at
+  columns:
+    - name: patient_id
+      type: VARCHAR
+      nullable: false
+      classification: confidential
+    - name: source_updated_at
+      type: TIMESTAMP_NTZ
+      nullable: false
+      classification: internal
+    - name: source_operation
+      type: VARCHAR
+      nullable: false
+      classification: internal
+    - name: source_sequence
+      type: NUMBER
+      nullable: false
+      classification: internal
+    - name: ingested_at
+      type: TIMESTAMP_NTZ
+      nullable: false
+      classification: internal
+  change_semantics:
+    mode: cdc
+    operation_column: source_operation
+    sequence_column: source_sequence
+    delete_semantics: tombstone
+  cadence: continuous-or-micro-batch
+  retention_days: 30
+  breaking_change_policy: versioned_contract
