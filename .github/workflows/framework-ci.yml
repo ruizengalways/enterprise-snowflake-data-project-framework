@@ -193,6 +193,7 @@ jobs:
           grep -qi "system\$stream_has_data('CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM')" "$FILE"
           grep -qi "task_auto_retry_attempts = 1" "$FILE"
           grep -qi "suspend_task_after_num_failures = 3" "$FILE"
+          grep -qi "overlap_policy = NO_OVERLAP" "$FILE"
           grep -qi "alter task CI_HEALTH.PR_123_STAGING.PROCESS_PATIENT_EVENT resume" "$FILE"
 
       - name: Assert checkpoint SQL
@@ -224,7 +225,7 @@ jobs:
         run: |
           FILE="${RUNNER_TEMP}/capture-render.txt"
           grep -qi "merge into CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT" "$FILE"
-          grep -qi 'partition by.*"patient_id"' "$FILE" || grep -qi '"patient_id"' "$FILE"
+          grep -qi '"patient_id"' "$FILE"
           grep -qi "when matched and source.\"op\" in" "$FILE"
 
       - name: Assert full-change SCD2 SQL
@@ -244,3 +245,13 @@ jobs:
           grep -qi "_esf_is_current = false" "$FILE"
           grep -qi "not exists" "$FILE"
           grep -qi "_esf_valid_from" "$FILE"
+
+      - name: Assert transactional SCD2 Stream Task SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "create or alter task CI_HEALTH.PR_123_CANONICAL.PROCESS_PATIENT_HISTORY" "$FILE"
+          grep -qi "insert overwrite into CI_HEALTH.PR_123_STAGING.PATIENT_AFFECTED_KEYS" "$FILE"
+          grep -qi "from CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"
+          grep -qi "rollback" "$FILE"
+          grep -qi "raise" "$FILE"
+          grep -qi "overlap_policy = NO_OVERLAP" "$FILE"
