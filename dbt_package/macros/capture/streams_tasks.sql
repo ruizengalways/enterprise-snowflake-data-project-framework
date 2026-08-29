@@ -1,3 +1,21 @@
+{% macro esf_standard_stream_sql(stream_relation, source_relation, show_initial_rows=false, comment=none) -%}
+    {%- if stream_relation is not string or stream_relation | trim == '' -%}
+        {{ exceptions.raise_compiler_error('stream_relation must be a non-empty fully-qualified Snowflake identifier') }}
+    {%- endif -%}
+    {%- if source_relation is not string or source_relation | trim == '' -%}
+        {{ exceptions.raise_compiler_error('source_relation must be a non-empty fully-qualified Snowflake identifier') }}
+    {%- endif -%}
+-- Standard Snowflake Stream: use for Snowflake tables whose UPDATE/DELETE
+-- changes must be consumed. Snowflake owns the CDC offset and metadata columns.
+create stream if not exists {{ stream_relation }}
+    on table {{ source_relation }}
+    append_only = false
+    show_initial_rows = {{ 'true' if show_initial_rows else 'false' }}
+{%- if comment is not none %}
+    comment = '{{ comment | replace("'", "''") }}'
+{%- endif %}
+{%- endmacro %}
+
 {% macro esf_append_only_stream_sql(stream_relation, source_relation, show_initial_rows=false, comment=none) -%}
     {%- if stream_relation is not string or stream_relation | trim == '' -%}
         {{ exceptions.raise_compiler_error('stream_relation must be a non-empty fully-qualified Snowflake identifier') }}
@@ -5,10 +23,10 @@
     {%- if source_relation is not string or source_relation | trim == '' -%}
         {{ exceptions.raise_compiler_error('source_relation must be a non-empty fully-qualified Snowflake identifier') }}
     {%- endif -%}
--- Snowflake owns the CDC offset. Do not recreate an existing stream as part of
--- routine deployment: recreating or replacing an offset-bearing stream can
--- change/reset consumption semantics. Source/APPEND_ONLY changes are explicit
--- migrations, not framework reconciliation.
+-- Append-only Snowflake Stream: use for immutable event/landing tables where
+-- only inserted rows are meaningful. Snowflake owns the CDC offset.
+-- Do not recreate an existing stream during routine deployment. Source or
+-- APPEND_ONLY changes are explicit migrations because offset is runtime state.
 create stream if not exists {{ stream_relation }}
     on table {{ source_relation }}
     append_only = true
