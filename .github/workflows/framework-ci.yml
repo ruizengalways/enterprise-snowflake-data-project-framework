@@ -158,7 +158,7 @@ jobs:
             --schema PR_123_STAGING \
             --pre-hook-contains "refresh_mode = INCREMENTAL"
 
-      - name: Render classic capture SQL without querying Snowflake
+      - name: Render capture SQL without querying Snowflake
         run: |
           dbt run-operation smoke_capture_sql \
             --project-dir examples/dbt-smoke \
@@ -178,3 +178,19 @@ jobs:
           grep -qi "'UPDATE' as _esf_change_type" "$FILE"
           grep -qi "'DELETE' as _esf_change_type" "$FILE"
           grep -qi "union all by name" "$FILE"
+
+      - name: Assert append-only Stream SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "create or alter stream CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"
+          grep -qi "append_only = true" "$FILE"
+          grep -qi "show_initial_rows = false" "$FILE"
+
+      - name: Assert triggered Task SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "create or alter task CI_HEALTH.PR_123_STAGING.PROCESS_PATIENT_EVENT" "$FILE"
+          grep -qi "system\$stream_has_data('CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM')" "$FILE"
+          grep -qi "task_auto_retry_attempts = 1" "$FILE"
+          grep -qi "suspend_task_after_num_failures = 3" "$FILE"
+          grep -qi "alter task CI_HEALTH.PR_123_STAGING.PROCESS_PATIENT_EVENT resume" "$FILE"
