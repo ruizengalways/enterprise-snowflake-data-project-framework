@@ -16,7 +16,7 @@ on:
         required: true
         type: string
       framework_ref:
-        description: Pinned framework commit/tag used to render workspace/query-tag SQL.
+        description: "Immutable 40-character framework Git commit SHA used to render workspace/query-tag SQL."
         required: true
         type: string
 
@@ -31,14 +31,12 @@ jobs:
     environment: ci
 
     env:
-      SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
-      SNOWFLAKE_OIDC_AUDIENCE: ${{ vars.SNOWFLAKE_OIDC_AUDIENCE }}
       SNOWFLAKE_AUTHENTICATOR: WORKLOAD_IDENTITY
       SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
       SNOWFLAKE_ENHANCED_EXIT_CODES: "1"
 
     steps:
-      - name: Validate workflow inputs and environment
+      - name: Validate immutable workflow inputs
         shell: bash
         run: |
           set -euo pipefail
@@ -50,14 +48,28 @@ jobs:
             echo "action must be create or drop" >&2
             exit 1
           fi
-          if [[ -z "${SNOWFLAKE_ACCOUNT:-}" || -z "${SNOWFLAKE_OIDC_AUDIENCE:-}" ]]; then
+          if [[ ! "${{ inputs.framework_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "framework_ref must be a full lowercase 40-character immutable Git commit SHA" >&2
+            exit 1
+          fi
+
+      - name: Load approved Snowflake environment configuration
+        shell: bash
+        env:
+          ESF_SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+          ESF_SNOWFLAKE_OIDC_AUDIENCE: ${{ vars.SNOWFLAKE_OIDC_AUDIENCE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ESF_SNOWFLAKE_ACCOUNT:-}" || -z "${ESF_SNOWFLAKE_OIDC_AUDIENCE:-}" ]]; then
             echo "GitHub Environment ci must define SNOWFLAKE_ACCOUNT and SNOWFLAKE_OIDC_AUDIENCE." >&2
             exit 1
           fi
-          if [[ "${SNOWFLAKE_OIDC_AUDIENCE}" == "snowflakecomputing.com" ]]; then
+          if [[ "${ESF_SNOWFLAKE_OIDC_AUDIENCE}" == "snowflakecomputing.com" ]]; then
             echo "Use an account-scoped Snowflake OIDC audience, not snowflakecomputing.com." >&2
             exit 1
           fi
+          echo "SNOWFLAKE_ACCOUNT=${ESF_SNOWFLAKE_ACCOUNT}" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_OIDC_AUDIENCE=${ESF_SNOWFLAKE_OIDC_AUDIENCE}" >> "${GITHUB_ENV}"
 
       - name: Checkout calling project
         uses: actions/checkout@v7.0.1
@@ -72,6 +84,16 @@ jobs:
           ref: ${{ inputs.framework_ref }}
           persist-credentials: false
           path: framework
+
+      - name: Verify framework revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          framework_sha="$(git -C framework rev-parse HEAD)"
+          if [[ "${framework_sha}" != "${{ inputs.framework_ref }}" ]]; then
+            echo "Framework checkout does not match requested framework_ref." >&2
+            exit 1
+          fi
 
       - name: Setup Python
         uses: actions/setup-python@v7.0.0
