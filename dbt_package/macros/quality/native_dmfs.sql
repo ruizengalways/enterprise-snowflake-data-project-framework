@@ -17,6 +17,7 @@ alter {{ kind | lower }} {{ relation }}
     relation,
     warn_after_minutes,
     error_after_minutes,
+    execute_as_role,
     timestamp_column=none,
     object_type='TABLE',
     warn_expectation='freshness_warn',
@@ -25,6 +26,9 @@ alter {{ kind | lower }} {{ relation }}
     {%- set kind = object_type | upper -%}
     {%- if kind not in ['TABLE', 'VIEW'] -%}
         {{ exceptions.raise_compiler_error('object_type must be TABLE or VIEW') }}
+    {%- endif -%}
+    {%- if execute_as_role is not string or execute_as_role | trim == '' -%}
+        {{ exceptions.raise_compiler_error('execute_as_role is required for governed DMF associations') }}
     {%- endif -%}
     {%- if warn_after_minutes | int < 1 or error_after_minutes | int < 1 -%}
         {{ exceptions.raise_compiler_error('freshness thresholds must be positive minutes') }}
@@ -35,12 +39,13 @@ alter {{ kind | lower }} {{ relation }}
     {%- if kind == 'VIEW' and timestamp_column is none -%}
         {{ exceptions.raise_compiler_error('Snowflake FRESHNESS on a view requires a timestamp column') }}
     {%- endif -%}
--- Deployment-time association DDL. Snowflake permits only one DMF of the same
--- kind on the same argument set, so inspect DATA_METRIC_FUNCTION_REFERENCES
--- before applying this to an already-governed object.
+-- Deployment-time association DDL. EXECUTE AS ROLE lets a governed account
+-- role with SELECT + EXECUTE DATA METRIC FUNCTION own execution semantics
+-- without taking object OWNERSHIP from the data-project lifecycle.
 alter {{ kind | lower }} {{ relation }}
     add data metric function snowflake.core.freshness
     on ({% if timestamp_column is not none %}{{ adapter.quote(timestamp_column) }}{% endif %})
+    execute as role {{ adapter.quote(execute_as_role) }}
     expectation {{ warn_expectation }} (value <= {{ (warn_after_minutes | int) * 60 }}),
                 {{ error_expectation }} (value <= {{ (error_after_minutes | int) * 60 }})
 {%- endmacro %}
@@ -48,6 +53,7 @@ alter {{ kind | lower }} {{ relation }}
 {% macro esf_native_unique_count_dmf_sql(
     relation,
     column,
+    execute_as_role,
     minimum_unique_count=none,
     object_type='TABLE',
     expectation_name='minimum_unique_count'
@@ -56,9 +62,13 @@ alter {{ kind | lower }} {{ relation }}
     {%- if kind not in ['TABLE', 'VIEW'] -%}
         {{ exceptions.raise_compiler_error('object_type must be TABLE or VIEW') }}
     {%- endif -%}
+    {%- if execute_as_role is not string or execute_as_role | trim == '' -%}
+        {{ exceptions.raise_compiler_error('execute_as_role is required for governed DMF associations') }}
+    {%- endif -%}
 alter {{ kind | lower }} {{ relation }}
     add data metric function snowflake.core.unique_count
     on ({{ adapter.quote(column) }})
+    execute as role {{ adapter.quote(execute_as_role) }}
 {%- if minimum_unique_count is not none %}
     expectation {{ expectation_name }} (value >= {{ minimum_unique_count | int }})
 {%- endif %}
