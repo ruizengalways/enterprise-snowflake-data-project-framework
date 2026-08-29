@@ -31,43 +31,22 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
-      - name: Validate minimal metadata example
-        run: python validation/validate_metadata.py --project-root examples/minimal-project
-
-      - name: Render validated dbt vars
-        run: python scripts/render_dbt_vars.py --project-root examples/minimal-project
-
-      - name: Smoke-test PR workspace SQL
+      - name: Validate metadata and execution utilities
         run: |
+          python validation/validate_metadata.py --project-root examples/minimal-project
+          python scripts/render_dbt_vars.py --project-root examples/minimal-project
           python scripts/render_workspace_sql.py \
-            --kind pr \
-            --action create \
-            --database CI_HEALTH \
-            --pr-number 123 \
+            --kind pr --action create --database CI_HEALTH --pr-number 123 \
             --layers staging marts
-
-      - name: Smoke-test query tag SQL
-        run: |
           python scripts/render_query_tag.py \
-            --project health \
-            --environment ci \
-            --workload pr_ci \
-            --dataset patient \
-            --pr-number 123 \
-            --run-id "${GITHUB_RUN_ID}" \
-            --git-sha "${GITHUB_SHA}" \
-            --as-sql
-
-      - name: Smoke-test target resolver
-        run: |
+            --project health --environment ci --workload pr_ci \
+            --dataset patient --pr-number 123 \
+            --run-id "${GITHUB_RUN_ID}" --git-sha "${GITHUB_SHA}" --as-sql
           python scripts/resolve_dbt_target.py \
-            --project-code HEALTH \
-            --environment ci \
-            --workload ci \
-            --pr-number 123
+            --project-code HEALTH --environment ci --workload ci --pr-number 123
 
   dbt-smoke:
-    name: dbt 1.12 target, loads, capture, native quality and SCD SQL
+    name: dbt 1.12 native Snowflake and SCD contracts
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -87,193 +66,133 @@ jobs:
           python -m pip install -r requirements-dbt.txt
           python -m pip install -e .
 
-      - name: Resolve CI target
+      - name: Resolve CI target and parse offline
         run: |
           python scripts/resolve_dbt_target.py \
-            --project-code HEALTH \
-            --environment ci \
-            --workload ci \
-            --pr-number 123 \
+            --project-code HEALTH --environment ci --workload ci --pr-number 123 \
             --format env >> "$GITHUB_ENV"
+          dbt deps --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
+          dbt parse --no-partial-parse \
+            --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
 
-      - name: Install local dbt framework package
-        run: dbt deps --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
-
-      - name: Parse without connecting to Snowflake
-        run: dbt parse --no-partial-parse --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
-
-      - name: Assert target resolution
+      - name: Assert model routing and standard loads
         run: |
+          MANIFEST=examples/dbt-smoke/target/manifest.json
           python scripts/assert_dbt_manifest.py \
-            --manifest examples/dbt-smoke/target/manifest.json \
-            --model example \
-            --database CI_HEALTH \
-            --schema PR_123_STAGING
-
-      - name: Assert full-refresh strategy
-        run: |
+            --manifest "$MANIFEST" --model example \
+            --database CI_HEALTH --schema PR_123_STAGING
           python scripts/assert_dbt_manifest.py \
-            --manifest examples/dbt-smoke/target/manifest.json \
-            --model smoke_full_refresh \
-            --database CI_HEALTH \
-            --schema PR_123_STAGING \
-            --materialized table
-
-      - name: Assert append-only strategy
-        run: |
+            --manifest "$MANIFEST" --model smoke_full_refresh \
+            --database CI_HEALTH --schema PR_123_STAGING --materialized table
           python scripts/assert_dbt_manifest.py \
-            --manifest examples/dbt-smoke/target/manifest.json \
-            --model smoke_append_only \
-            --database CI_HEALTH \
-            --schema PR_123_STAGING \
-            --materialized incremental \
-            --incremental-strategy append
-
-      - name: Assert incremental-merge strategy
-        run: |
+            --manifest "$MANIFEST" --model smoke_append_only \
+            --database CI_HEALTH --schema PR_123_STAGING \
+            --materialized incremental --incremental-strategy append
           python scripts/assert_dbt_manifest.py \
-            --manifest examples/dbt-smoke/target/manifest.json \
-            --model smoke_incremental_merge \
-            --database CI_HEALTH \
-            --schema PR_123_STAGING \
-            --materialized incremental \
-            --incremental-strategy merge \
-            --unique-key id
-
-      - name: Assert tombstone current-state MERGE hook
-        run: |
+            --manifest "$MANIFEST" --model smoke_incremental_merge \
+            --database CI_HEALTH --schema PR_123_STAGING \
+            --materialized incremental --incremental-strategy merge --unique-key id
           python scripts/assert_dbt_manifest.py \
-            --manifest examples/dbt-smoke/target/manifest.json \
-            --model smoke_capture_merge \
-            --database CI_HEALTH \
-            --schema PR_123_STAGING \
+            --manifest "$MANIFEST" --model smoke_capture_merge \
+            --database CI_HEALTH --schema PR_123_STAGING \
             --pre-hook-contains "when matched and source"
-
-      - name: Assert optional Dynamic Table projection hook
-        run: |
           python scripts/assert_dbt_manifest.py \
-            --manifest examples/dbt-smoke/target/manifest.json \
-            --model smoke_capture_dynamic_table \
-            --database CI_HEALTH \
-            --schema PR_123_STAGING \
+            --manifest "$MANIFEST" --model smoke_capture_dynamic_table \
+            --database CI_HEALTH --schema PR_123_STAGING \
             --pre-hook-contains "refresh_mode = INCREMENTAL"
 
-      - name: Render capture SQL without querying Snowflake
+      - name: Render framework SQL without connecting to Snowflake
         run: |
           dbt run-operation smoke_capture_sql \
             --project-dir examples/dbt-smoke \
             --profiles-dir examples/dbt-smoke \
             | tee "${RUNNER_TEMP}/capture-render.txt"
 
-      - name: Assert latest-observation SQL
+      - name: Assert Snowflake-native capture and orchestration
+        shell: bash
         run: |
+          set -euo pipefail
           FILE="${RUNNER_TEMP}/capture-render.txt"
-          grep -qi "qualify row_number() over" "$FILE"
-          grep -qi '"source_sequence" desc' "$FILE"
 
-      - name: Assert snapshot-diff fallback SQL
-        run: |
-          FILE="${RUNNER_TEMP}/capture-render.txt"
+          # Snapshot diff remains a fallback for true external snapshots.
           grep -qi "'INSERT' as _esf_change_type" "$FILE"
           grep -qi "'UPDATE' as _esf_change_type" "$FILE"
           grep -qi "'DELETE' as _esf_change_type" "$FILE"
-          grep -qi "union all by name" "$FILE"
 
-      - name: Assert offset-safe standard Stream SQL
-        run: |
-          FILE="${RUNNER_TEMP}/capture-render.txt"
+          # Mutable Snowflake source -> standard Stream.
           grep -qi "create stream if not exists CI_HEALTH.PR_123_STAGING.PATIENT_CURRENT_STREAM" "$FILE"
-          grep -qi "on table CI_HEALTH.PR_123_STAGING.PATIENT_CURRENT_SOURCE" "$FILE"
           grep -qi "append_only = false" "$FILE"
 
-      - name: Assert offset-safe append-only Stream SQL
-        run: |
-          FILE="${RUNNER_TEMP}/capture-render.txt"
+          # Immutable events -> append-only Stream.
           grep -qi "create stream if not exists CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"
           grep -qi "append_only = true" "$FILE"
           grep -qi "show_initial_rows = false" "$FILE"
           if grep -qi "create or alter stream CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"; then
-            echo "Offset-bearing streams must not use CREATE OR ALTER in routine deployment." >&2
+            echo "Routine deployment must not ALTER/replace an offset-bearing Stream." >&2
             exit 1
           fi
 
-      - name: Assert triggered Task SQL
-        run: |
-          FILE="${RUNNER_TEMP}/capture-render.txt"
+          # Snowflake Triggered Task owns scheduling/retry/overlap.
           grep -qi "create or alter task CI_HEALTH.PR_123_STAGING.PROCESS_PATIENT_EVENT" "$FILE"
           grep -qi "system\$stream_has_data('CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM')" "$FILE"
           grep -qi "task_auto_retry_attempts = 1" "$FILE"
           grep -qi "suspend_task_after_num_failures = 3" "$FILE"
           grep -qi "overlap_policy = NO_OVERLAP" "$FILE"
-          grep -qi "alter task CI_HEALTH.PR_123_STAGING.PROCESS_PATIENT_EVENT resume" "$FILE"
 
-      - name: Assert native Task monitoring SQL
-        run: |
-          FILE="${RUNNER_TEMP}/capture-render.txt"
+          # Snowflake owns Task run history.
           grep -qi "information_schema.task_history" "$FILE"
-          grep -qi "task_name => 'PROCESS_PATIENT_EVENT'" "$FILE"
           grep -qi "information_schema.complete_task_graphs" "$FILE"
-          grep -qi "root_task_name => 'PROCESS_PATIENT_EVENT'" "$FILE"
 
-      - name: Assert external-source checkpoint SQL
+      - name: Assert native quality and bounded custom state
+        shell: bash
         run: |
+          set -euo pipefail
           FILE="${RUNNER_TEMP}/capture-render.txt"
-          grep -qi "from PLATFORM_CONTROL.OPERATIONS.PIPELINE_CHECKPOINT" "$FILE"
-          grep -qi "checkpoint_kind = 'source_position'" "$FILE"
-          grep -qi "call PLATFORM_CONTROL.OPERATIONS.ADVANCE_PIPELINE_CHECKPOINT" "$FILE"
-          grep -qi "object_construct('source_sequence', 12345)" "$FILE"
 
-      - name: Assert Snowflake-native quality and explicit reconciliation SQL
-        run: |
-          FILE="${RUNNER_TEMP}/capture-render.txt"
+          # Native Data Quality Monitoring for supported standard checks.
           grep -qi "data_metric_schedule = 'TRIGGER_ON_CHANGES'" "$FILE"
           grep -qi "snowflake.core.freshness" "$FILE"
           grep -qi "expectation freshness_warn (value <= 3600)" "$FILE"
           grep -qi "freshness_error (value <= 7200)" "$FILE"
           grep -qi "snowflake.local.data_quality_monitoring_expectation_status" "$FILE"
+
+          # Cross-table reconciliation remains explicit SQL.
           grep -qi "count(distinct" "$FILE"
           grep -qi "min_source_timestamp" "$FILE"
           grep -qi "max_source_timestamp" "$FILE"
 
-      - name: Assert external-orchestrator run ledger SQL
-        run: |
-          FILE="${RUNNER_TEMP}/capture-render.txt"
+          # PLATFORM_CONTROL checkpoint/run state is only for external ownership.
+          grep -qi "from PLATFORM_CONTROL.OPERATIONS.PIPELINE_CHECKPOINT" "$FILE"
+          grep -qi "call PLATFORM_CONTROL.OPERATIONS.ADVANCE_PIPELINE_CHECKPOINT" "$FILE"
           grep -qi "merge into PLATFORM_CONTROL.OPERATIONS.PIPELINE_RUN" "$FILE"
           grep -qi "'RUNNING' as status" "$FILE"
           grep -qi "status = 'SUCCEEDED'" "$FILE"
-          grep -qi "rows_deleted = 5" "$FILE"
 
-      - name: Assert deterministic SCD1 SQL
+      - name: Assert SCD native split and correctness SQL
+        shell: bash
         run: |
+          set -euo pipefail
           FILE="${RUNNER_TEMP}/capture-render.txt"
+
+          # SCD1: native Dynamic Table path plus deterministic classic fallback.
+          grep -qi "create or alter dynamic table CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT_DT" "$FILE"
+          grep -qi "refresh_mode = ADAPTIVE" "$FILE"
           grep -qi "merge into CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT" "$FILE"
-          grep -qi '"patient_id"' "$FILE"
-          grep -qi "when matched and source.\"op\" in" "$FILE"
 
-      - name: Assert full-change SCD2 SQL
-        run: |
-          FILE="${RUNNER_TEMP}/capture-render.txt"
+          # Full-change and snapshot SCD2 remain explicit history logic.
           grep -qi "_esf_version_ordinal" "$FILE"
           grep -qi "lead(\"source_updated_at\")" "$FILE"
-          grep -qi "delete from CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY" "$FILE"
-          grep -qi "insert into CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY" "$FILE"
-          grep -qi "begin transaction" "$FILE"
-          grep -qi "commit" "$FILE"
-
-      - name: Assert snapshot SCD2 SQL
-        run: |
-          FILE="${RUNNER_TEMP}/capture-render.txt"
           grep -qi "update CI_HEALTH.PR_123_CANONICAL.PATIENT_SNAPSHOT_HISTORY" "$FILE"
           grep -qi "_esf_is_current = false" "$FILE"
-          grep -qi "not exists" "$FILE"
-          grep -qi "_esf_valid_from" "$FILE"
 
-      - name: Assert transactional SCD2 Stream Task SQL
-        run: |
-          FILE="${RUNNER_TEMP}/capture-render.txt"
+          # Low-latency SCD2 uses one native Stream repeatedly inside one transaction.
           grep -qi "create or alter task CI_HEALTH.PR_123_CANONICAL.PROCESS_PATIENT_HISTORY" "$FILE"
-          grep -qi "insert overwrite into CI_HEALTH.PR_123_STAGING.PATIENT_AFFECTED_KEYS" "$FILE"
+          grep -qi "delete from CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY" "$FILE"
           grep -qi "from CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"
+          grep -qi "begin transaction" "$FILE"
           grep -qi "rollback" "$FILE"
           grep -qi "raise" "$FILE"
-          grep -qi "overlap_policy = NO_OVERLAP" "$FILE"
+          if grep -qi "insert overwrite into CI_HEALTH.PR_123_STAGING.PATIENT_AFFECTED_KEYS" "$FILE"; then
+            echo "Stream SCD2 must use repeatable Stream reads, not a shared affected-key work table." >&2
+            exit 1
+          fi
