@@ -75,9 +75,17 @@ def validate_raw_contract(document: dict[str, Any], path: Path) -> list[str]:
         errors.append(f"{path}: contract.columns contains duplicate names: {', '.join(duplicates)}")
 
     column_names = set(names)
+    columns_by_name = {column["name"]: column for column in columns}
     missing_keys = [name for name in contract["business_key"] if name not in column_names]
     if missing_keys:
         errors.append(f"{path}: business_key columns missing from columns: {', '.join(missing_keys)}")
+    nullable_keys = [
+        name
+        for name in contract["business_key"]
+        if name in columns_by_name and columns_by_name[name].get("nullable") is True
+    ]
+    if nullable_keys:
+        errors.append(f"{path}: business_key columns must be nullable=false: {', '.join(nullable_keys)}")
 
     source_timestamp = contract.get("source_timestamp")
     if source_timestamp and source_timestamp not in column_names:
