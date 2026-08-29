@@ -34,6 +34,9 @@ jobs:
       - name: Validate minimal metadata example
         run: python validation/validate_metadata.py --project-root examples/minimal-project
 
+      - name: Render validated dbt vars
+        run: python scripts/render_dbt_vars.py --project-root examples/minimal-project
+
       - name: Smoke-test PR workspace SQL
         run: |
           python scripts/render_workspace_sql.py \
@@ -64,7 +67,7 @@ jobs:
             --pr-number 123
 
   dbt-smoke:
-    name: dbt 1.12 target resolution
+    name: dbt 1.12 target and basic loads
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -99,10 +102,40 @@ jobs:
       - name: Parse without connecting to Snowflake
         run: dbt parse --no-partial-parse --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
 
-      - name: Assert manifest target
+      - name: Assert target resolution
         run: |
           python scripts/assert_dbt_manifest.py \
             --manifest examples/dbt-smoke/target/manifest.json \
             --model example \
             --database CI_HEALTH \
             --schema PR_123_STAGING
+
+      - name: Assert full-refresh strategy
+        run: |
+          python scripts/assert_dbt_manifest.py \
+            --manifest examples/dbt-smoke/target/manifest.json \
+            --model smoke_full_refresh \
+            --database CI_HEALTH \
+            --schema PR_123_STAGING \
+            --materialized table
+
+      - name: Assert append-only strategy
+        run: |
+          python scripts/assert_dbt_manifest.py \
+            --manifest examples/dbt-smoke/target/manifest.json \
+            --model smoke_append_only \
+            --database CI_HEALTH \
+            --schema PR_123_STAGING \
+            --materialized incremental \
+            --incremental-strategy append
+
+      - name: Assert incremental-merge strategy
+        run: |
+          python scripts/assert_dbt_manifest.py \
+            --manifest examples/dbt-smoke/target/manifest.json \
+            --model smoke_incremental_merge \
+            --database CI_HEALTH \
+            --schema PR_123_STAGING \
+            --materialized incremental \
+            --incremental-strategy merge \
+            --unique-key id
