@@ -119,6 +119,7 @@ Do not rely on it as the only history store. Snapshot evidence remains in a norm
 - `updated_at > last_watermark`
 - timestamp plus overlap window
 - monotonically increasing source version
+- current-state row carrying a retained soft-delete flag such as `is_deleted=true`
 
 ### Authoritative RAW
 
@@ -159,10 +160,23 @@ Never dedupe only by ingestion timestamp.
 ```text
 RAW observations
  -> QUALIFY ROW_NUMBER over source key/version
+ -> interpret retained soft-delete row when the source provides one
  -> MERGE current target
  -> commit
  -> update source checkpoint
 ```
+
+### Soft-delete row rule
+
+A row such as:
+
+```text
+id=300, updated_at=..., is_deleted=true
+```
+
+is still **current-state watermark semantics** when it is returned through the same current-table/version interface.
+
+Do not classify it as `net_change` merely because a vendor or document calls the row a tombstone. The current v1 contract can carry such a column, but it does not yet have a first-class `soft_delete_column/value` field, so the interpretation remains explicit project/source SQL.
 
 ### Dynamic Table option
 
@@ -172,17 +186,17 @@ Useful for declarative latest-row/current projections when incremental refresh i
 
 - SCD1: reliable for captured rows.
 - SCD2: observed-version history only.
-- Delete: unavailable unless the source supplies delete semantics separately.
+- Physical delete: unavailable unless the source supplies a retained soft-delete row, a separate delete feed, or another complete reconciliation mechanism.
 
 ---
 
-## Archetype C — Net Change / Tombstone
+## Archetype C — Net Change
 
 ### Source examples
 
-- update extract + tombstone
-- CDC API returning one final row per key per polling window
+- CDC API returning one final row/change per key per polling window
 - native CDC net-change mode
+- compacted change feed with an explicit DELETE/tombstone **event** for the entity/window
 
 ### Authoritative RAW
 
@@ -191,7 +205,7 @@ Append each captured net-change batch before merging current state:
 ```text
 batch_id
 business_key
-operation/tombstone
+operation/delete-event
 source position/version
 payload
 ```
@@ -204,9 +218,9 @@ This preserves what the source delivered while acknowledging that intermediate s
 append batch
  -> dedupe by source position + business key
  -> MERGE current
-      matched DELETE/tombstone -> DELETE or soft-delete
-      matched update           -> UPDATE
-      not matched insert       -> INSERT
+      matched DELETE event -> DELETE or soft-delete target
+      matched update       -> UPDATE
+      not matched insert   -> INSERT
 ```
 
 A standard Snowflake Stream may trigger downstream processing, but it does not improve source change fidelity.
@@ -246,6 +260,12 @@ Kafka topic + partition + offset
 Delta commit version + row identity
 ```
 
+### Important image-semantics rule
+
+`full_change` means every captured logical change is preserved. It does **not** universally mean every source provides both before and after images, nor that every event contains a complete post-change row.
+
+The current v1 metadata contract does not yet declare `after_only`, `before_and_after`, `delta_only`, or similar image capability. A generic current/SCD consumer must therefore only assume state that the source RAW contract actually supplies. Source-specific delta reconstruction remains explicit until a real repeated use case justifies another bounded contract field.
+
 ### Important Snowflake Stream rule
 
 A Snowflake standard Stream is an offset-based change consumer over a Snowflake source object, not an audit log. Do not land full CDC into only a mutable current table and expect a Stream on that table to recreate every source transition.
@@ -274,8 +294,8 @@ Do not use a Stream on a Dynamic Table as full audit history; net changes can co
 
 ### Downstream guarantee
 
-- SCD1: yes.
-- SCD2: full fidelity when source ordering and event completeness are reliable.
+- SCD1: yes when each event stream supplies enough state to derive current state.
+- SCD2: full captured-change fidelity when source ordering/completeness and state reconstruction are reliable.
 
 ---
 
@@ -355,10 +375,10 @@ Useful downstream of landed file/API evidence, not as a replacement for cursor/f
 
 | Capture fidelity | Delete knowledge | SCD1 | SCD2 guarantee |
 |---|---|---:|---|
-| current state / watermark | none | yes | observed updates only; no reliable deletes |
-| current state + tombstone | tombstone | yes | observed updates/deletes only |
-| net change | explicit delete | yes | one net state per capture window |
-| full change | explicit/source defined | yes | full ordered history when source sequence is reliable |
+| current state / watermark | none | yes | observed updates only; no reliable physical deletes |
+| current state + retained soft-delete row | row state | yes | observed updates/deletes only |
+| net change | explicit delete event | yes | one net state per capture window |
+| full change | explicit/source defined | yes | full ordered captured history when source sequence/state reconstruction are reliable |
 | full event | event defined | yes | complete business event history; entity SCD2 depends on event semantics |
 | snapshot | inferred diff | yes | snapshot-boundary history |
 
@@ -392,3 +412,17 @@ If a Dynamic Table has a defect or performance regression, switch execution engi
 Classic Task graphs can use native retry/suspension/history controls. Triggered Tasks can use `WHEN SYSTEM$STREAM_HAS_DATA(...)` so unpredictable arrival does not require frequent warehouse polling.
 
 Recovery remains deterministic: replay retained RAW evidence from a checkpoint/batch/source position rather than manually editing derived production data.
+
+# Current contract gaps
+
+The six-archetype model remains valid, but current v1 contracts do not yet solve every production case:
+
+```text
+truly keyless source contracts
+first-class soft-delete-row column/value metadata
+before/after/delta image capability metadata
+safe initial snapshot -> incremental/CDC position handoff
+source-retention versus required recovery-window validation
+```
+
+Do not invent generic YAML fields for these until a real source proves the reusable need. The current cross-repository coverage audit is recorded in `enterprise-snowflake-platform-infra/docs/architecture/PIPELINE_PATTERN_COVERAGE.md`.
