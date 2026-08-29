@@ -12,7 +12,7 @@ on:
         required: true
         type: number
       action:
-        description: Workspace lifecycle action: create or drop.
+        description: "Workspace lifecycle action: create or drop."
         required: true
         type: string
       framework_ref:
