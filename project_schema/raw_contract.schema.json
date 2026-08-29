@@ -75,7 +75,60 @@
               "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
             },
             "delete_semantics": {
-              "enum": ["none", "hard_delete", "tombstone"]
+              "enum": [
+                "none",
+                "hard_delete",
+                "tombstone",
+                "inferred_snapshot_diff",
+                "source_defined"
+              ]
+            }
+          }
+        },
+        "capture": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["archetype", "fidelity", "checkpoint_kind"],
+          "properties": {
+            "archetype": {
+              "enum": [
+                "snapshot",
+                "watermark",
+                "net_change",
+                "full_change",
+                "snapshot_diff",
+                "cursor_or_file"
+              ]
+            },
+            "fidelity": {
+              "enum": ["current_state", "net_change", "full_change", "full_event"]
+            },
+            "checkpoint_kind": {
+              "enum": [
+                "none",
+                "watermark",
+                "cursor",
+                "source_position",
+                "event_offset",
+                "snapshot_id",
+                "file_identity"
+              ]
+            },
+            "lookback_minutes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "ordering_columns": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+            },
+            "idempotency_columns": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
             }
           }
         },
