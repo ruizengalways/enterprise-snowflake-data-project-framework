@@ -23,6 +23,7 @@ create or alter stream {{ stream_relation }}
     timeout_ms=3600000,
     auto_retry_attempts=1,
     suspend_after_failures=3,
+    overlap_policy='NO_OVERLAP',
     comment=none,
     resume=true
 ) -%}
@@ -50,6 +51,10 @@ create or alter stream {{ stream_relation }}
     {%- if suspend_after_failures < 0 -%}
         {{ exceptions.raise_compiler_error('suspend_after_failures must be >= 0') }}
     {%- endif -%}
+    {%- set overlap = overlap_policy | upper -%}
+    {%- if overlap not in ['NO_OVERLAP', 'ALLOW_CHILD_OVERLAP', 'ALLOW_ALL_OVERLAP'] -%}
+        {{ exceptions.raise_compiler_error('unsupported task overlap_policy: ' ~ overlap_policy) }}
+    {%- endif -%}
     {%- set escaped_stream = stream_relation | replace("'", "''") -%}
 create or alter task {{ task_relation }}
     warehouse = {{ adapter.quote(warehouse) }}
@@ -57,6 +62,7 @@ create or alter task {{ task_relation }}
     suspend_task_after_num_failures = {{ suspend_after_failures }}
     task_auto_retry_attempts = {{ auto_retry_attempts }}
     user_task_minimum_trigger_interval_in_seconds = {{ minimum_trigger_interval_seconds }}
+    overlap_policy = {{ overlap }}
 {%- if comment is not none %}
     comment = '{{ comment | replace("'", "''") }}'
 {%- endif %}
