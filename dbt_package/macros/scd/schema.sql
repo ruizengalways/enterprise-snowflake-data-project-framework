@@ -10,7 +10,7 @@
     {%- if source_relation is not string or source_relation | trim == '' -%}
         {{ exceptions.raise_compiler_error('source_relation must be a non-empty Snowflake table relation') }}
     {%- endif -%}
-create {%- if transient %} transient{% endif %} table if not exists {{ target_relation }} like {{ source_relation }};
+create{% if transient %} transient{% endif %} table if not exists {{ target_relation }} like {{ source_relation }};
 
 alter table {{ target_relation }} add column if not exists _esf_valid_from timestamp_tz;
 alter table {{ target_relation }} add column if not exists _esf_valid_to timestamp_tz;
