@@ -1,0 +1,13 @@
+esf_dbt_smoke:
+  target: ci
+  outputs:
+    ci:
+      type: snowflake
+      account: dummy_account
+      user: dummy_user
+      password: dummy_password
+      role: AR_HEALTH_CI
+      database: "{{ env_var('DBT_DATABASE') }}"
+      warehouse: "{{ env_var('DBT_WAREHOUSE') }}"
+      schema: "{{ env_var('DBT_DEFAULT_SCHEMA', 'STAGING') }}"
+      threads: 1
