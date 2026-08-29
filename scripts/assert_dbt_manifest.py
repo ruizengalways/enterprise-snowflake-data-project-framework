@@ -7,11 +7,14 @@ from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Assert database/schema resolution in a dbt manifest.")
+    parser = argparse.ArgumentParser(description="Assert target/config resolution in a dbt manifest.")
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--database", required=True)
     parser.add_argument("--schema", required=True)
+    parser.add_argument("--materialized")
+    parser.add_argument("--incremental-strategy")
+    parser.add_argument("--unique-key")
     return parser.parse_args()
 
 
@@ -25,12 +28,27 @@ def main() -> None:
     ]
     if len(matches) != 1:
         raise SystemExit(f"expected one model named {args.model!r}, found {len(matches)}")
+
     node = matches[0]
-    actual = (node.get("database"), node.get("schema"))
-    expected = (args.database, args.schema)
-    if actual != expected:
-        raise SystemExit(f"dbt target mismatch: expected {expected}, got {actual}")
-    print(f"dbt target assertion passed: {args.database}.{args.schema}.{args.model}")
+    actual_target = (node.get("database"), node.get("schema"))
+    expected_target = (args.database, args.schema)
+    if actual_target != expected_target:
+        raise SystemExit(f"dbt target mismatch: expected {expected_target}, got {actual_target}")
+
+    config = node.get("config", {})
+    expected_config = {
+        "materialized": args.materialized,
+        "incremental_strategy": args.incremental_strategy,
+        "unique_key": args.unique_key,
+    }
+    for key, expected in expected_config.items():
+        if expected is None:
+            continue
+        actual = config.get(key)
+        if actual != expected:
+            raise SystemExit(f"dbt config mismatch for {key}: expected {expected!r}, got {actual!r}")
+
+    print(f"dbt manifest assertion passed: {args.database}.{args.schema}.{args.model}")
 
 
 if __name__ == "__main__":
