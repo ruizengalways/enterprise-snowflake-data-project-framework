@@ -67,7 +67,7 @@ jobs:
             --pr-number 123
 
   dbt-smoke:
-    name: dbt 1.12 target and basic loads
+    name: dbt 1.12 target, loads and capture SQL
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -139,3 +139,33 @@ jobs:
             --materialized incremental \
             --incremental-strategy merge \
             --unique-key id
+
+      - name: Assert tombstone current-state MERGE hook
+        run: |
+          python scripts/assert_dbt_manifest.py \
+            --manifest examples/dbt-smoke/target/manifest.json \
+            --model smoke_capture_merge \
+            --database CI_HEALTH \
+            --schema PR_123_STAGING \
+            --pre-hook-contains "when matched and source"
+
+      - name: Compile classic capture queries without Snowflake connection
+        run: |
+          dbt compile --no-partial-parse \
+            --select smoke_capture_latest smoke_capture_snapshot_diff \
+            --project-dir examples/dbt-smoke \
+            --profiles-dir examples/dbt-smoke
+
+      - name: Assert latest-observation SQL
+        run: |
+          FILE=examples/dbt-smoke/target/compiled/esf_dbt_smoke/models/staging/smoke_capture_latest.sql
+          grep -qi "qualify row_number() over" "$FILE"
+          grep -qi '"source_sequence" desc' "$FILE"
+
+      - name: Assert snapshot-diff SQL
+        run: |
+          FILE=examples/dbt-smoke/target/compiled/esf_dbt_smoke/models/staging/smoke_capture_snapshot_diff.sql
+          grep -qi "'INSERT' as _esf_change_type" "$FILE"
+          grep -qi "'UPDATE' as _esf_change_type" "$FILE"
+          grep -qi "'DELETE' as _esf_change_type" "$FILE"
+          grep -qi "union all by name" "$FILE"
