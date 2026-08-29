@@ -1,0 +1,30 @@
+name: Validate Enterprise Snowflake Metadata
+description: Validate project, dataset, and RAW-contract metadata against the pinned framework version.
+
+inputs:
+  project-root:
+    description: Project root relative to the caller workspace.
+    required: false
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v7.0.0
+      with:
+        python-version: "3.13"
+
+    - name: Install pinned framework action code
+      shell: bash
+      run: |
+        FRAMEWORK_ROOT="$(cd "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+        python -m pip install "${FRAMEWORK_ROOT}"
+
+    - name: Validate metadata tree
+      shell: bash
+      run: |
+        FRAMEWORK_ROOT="$(cd "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+        python "${FRAMEWORK_ROOT}/validation/validate_metadata.py" \
+          --project-root "${GITHUB_WORKSPACE}/${{ inputs.project-root }}" \
+          --schema-dir "${FRAMEWORK_ROOT}/project_schema"
