@@ -111,6 +111,117 @@ contract:
             self.assertTrue(any("operation_column column is not declared" in error for error in errors))
             self.assertTrue(any("sequence_column column is not declared" in error for error in errors))
 
+    def test_full_change_requires_ordering_and_idempotency(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config" / "datasets").mkdir(parents=True)
+            (root / "contracts" / "raw").mkdir(parents=True)
+            (root / "config" / "project.yml").write_text(
+                """schema_version: 1
+project:
+  code: TEST
+  name: Test Analytics
+  repository: enterprise-snowflake-test-analytics
+  owner_team: test-data
+""",
+                encoding="utf-8",
+            )
+            (root / "config" / "datasets" / "entity.yml").write_text(
+                """schema_version: 1
+dataset:
+  id: entity
+  owner_team: test-data
+  raw_contract: contracts/raw/entity.yml
+  load_strategy: append_only
+  implementation: standard
+""",
+                encoding="utf-8",
+            )
+            (root / "contracts" / "raw" / "entity.yml").write_text(
+                """schema_version: 1
+contract:
+  source_system: test_source
+  entity: entity
+  grain: one row per source event
+  business_key: [entity_id]
+  columns:
+    - name: entity_id
+      type: VARCHAR
+      nullable: false
+  change_semantics:
+    mode: append
+    delete_semantics: source_defined
+  capture:
+    archetype: full_change
+    fidelity: full_event
+    checkpoint_kind: event_offset
+  breaking_change_policy: reject
+""",
+                encoding="utf-8",
+            )
+
+            errors = validate_project_tree(root, SCHEMA_DIR)
+            self.assertTrue(any("full_change capture requires capture.ordering_columns" in error for error in errors))
+            self.assertTrue(any("full_change capture requires capture.idempotency_columns" in error for error in errors))
+
+    def test_capture_columns_must_be_declared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config" / "datasets").mkdir(parents=True)
+            (root / "contracts" / "raw").mkdir(parents=True)
+            (root / "config" / "project.yml").write_text(
+                """schema_version: 1
+project:
+  code: TEST
+  name: Test Analytics
+  repository: enterprise-snowflake-test-analytics
+  owner_team: test-data
+""",
+                encoding="utf-8",
+            )
+            (root / "config" / "datasets" / "entity.yml").write_text(
+                """schema_version: 1
+dataset:
+  id: entity
+  owner_team: test-data
+  raw_contract: contracts/raw/entity.yml
+  load_strategy: append_only
+  implementation: standard
+""",
+                encoding="utf-8",
+            )
+            (root / "contracts" / "raw" / "entity.yml").write_text(
+                """schema_version: 1
+contract:
+  source_system: test_source
+  entity: entity
+  grain: one row per source event
+  business_key: [entity_id]
+  columns:
+    - name: entity_id
+      type: VARCHAR
+      nullable: false
+    - name: source_sequence
+      type: NUMBER
+      nullable: false
+  change_semantics:
+    mode: append
+    delete_semantics: source_defined
+  capture:
+    archetype: full_change
+    fidelity: full_event
+    checkpoint_kind: event_offset
+    ordering_columns: [source_sequence, missing_order]
+    idempotency_columns: [entity_id, missing_event_id]
+  breaking_change_policy: reject
+""",
+                encoding="utf-8",
+            )
+
+            errors = validate_project_tree(root, SCHEMA_DIR)
+            self.assertTrue(any("capture.ordering_columns columns are not declared: missing_order" in error for error in errors))
+            self.assertTrue(any("capture.idempotency_columns columns are not declared: missing_event_id" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()
