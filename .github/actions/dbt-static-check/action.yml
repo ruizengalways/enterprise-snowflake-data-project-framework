@@ -1,0 +1,57 @@
+name: Validate Enterprise Snowflake dbt Project
+description: Install pinned dbt versions, resolve a CI target, install packages, and parse without connecting to Snowflake.
+
+inputs:
+  project-code:
+    description: Uppercase governed domain code such as HEALTH or TRANSPORT.
+    required: true
+  project-dir:
+    description: dbt project directory relative to the caller workspace.
+    required: false
+    default: dbt
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v7.0.0
+      with:
+        python-version: "3.13"
+
+    - name: Install pinned dbt and framework utilities
+      shell: bash
+      run: |
+        FRAMEWORK_ROOT="$(cd "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+        python -m pip install -r "${FRAMEWORK_ROOT}/requirements-dbt.txt"
+        python -m pip install "${FRAMEWORK_ROOT}"
+
+    - name: Resolve offline CI target
+      shell: bash
+      run: |
+        FRAMEWORK_ROOT="$(cd "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+        {
+          echo "SNOWFLAKE_ACCOUNT=dummy_account"
+          echo "SNOWFLAKE_USER=dummy_user"
+          echo "SNOWFLAKE_TOKEN=dummy_token"
+          echo "DBT_AUTHENTICATOR=workload_identity"
+        } >> "$GITHUB_ENV"
+        python "${FRAMEWORK_ROOT}/scripts/resolve_dbt_target.py" \
+          --project-code "${{ inputs.project-code }}" \
+          --environment ci \
+          --workload ci \
+          --pr-number 1 \
+          --format env >> "$GITHUB_ENV"
+
+    - name: Install dbt packages
+      shell: bash
+      run: |
+        dbt deps \
+          --project-dir "${GITHUB_WORKSPACE}/${{ inputs.project-dir }}" \
+          --profiles-dir "${GITHUB_WORKSPACE}/${{ inputs.project-dir }}"
+
+    - name: Parse dbt project without Snowflake connection
+      shell: bash
+      run: |
+        dbt parse --no-partial-parse \
+          --project-dir "${GITHUB_WORKSPACE}/${{ inputs.project-dir }}" \
+          --profiles-dir "${GITHUB_WORKSPACE}/${{ inputs.project-dir }}"
