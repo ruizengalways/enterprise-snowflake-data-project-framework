@@ -67,7 +67,7 @@ jobs:
             --pr-number 123
 
   dbt-smoke:
-    name: dbt 1.12 target, loads, capture, quality and SCD SQL
+    name: dbt 1.12 target, loads, capture, native quality and SCD SQL
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -179,12 +179,16 @@ jobs:
           grep -qi "'DELETE' as _esf_change_type" "$FILE"
           grep -qi "union all by name" "$FILE"
 
-      - name: Assert append-only Stream SQL
+      - name: Assert offset-safe append-only Stream SQL
         run: |
           FILE="${RUNNER_TEMP}/capture-render.txt"
-          grep -qi "create or alter stream CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"
+          grep -qi "create stream if not exists CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"
           grep -qi "append_only = true" "$FILE"
           grep -qi "show_initial_rows = false" "$FILE"
+          if grep -qi "create or alter stream CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"; then
+            echo "Offset-bearing streams must not use CREATE OR ALTER in routine deployment." >&2
+            exit 1
+          fi
 
       - name: Assert triggered Task SQL
         run: |
@@ -196,7 +200,15 @@ jobs:
           grep -qi "overlap_policy = NO_OVERLAP" "$FILE"
           grep -qi "alter task CI_HEALTH.PR_123_STAGING.PROCESS_PATIENT_EVENT resume" "$FILE"
 
-      - name: Assert checkpoint SQL
+      - name: Assert native Task monitoring SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "information_schema.task_history" "$FILE"
+          grep -qi "task_name => 'PROCESS_PATIENT_EVENT'" "$FILE"
+          grep -qi "information_schema.complete_task_graphs" "$FILE"
+          grep -qi "root_task_name => 'PROCESS_PATIENT_EVENT'" "$FILE"
+
+      - name: Assert external-source checkpoint SQL
         run: |
           FILE="${RUNNER_TEMP}/capture-render.txt"
           grep -qi "from PLATFORM_CONTROL.OPERATIONS.PIPELINE_CHECKPOINT" "$FILE"
@@ -204,16 +216,19 @@ jobs:
           grep -qi "call PLATFORM_CONTROL.OPERATIONS.ADVANCE_PIPELINE_CHECKPOINT" "$FILE"
           grep -qi "object_construct('source_sequence', 12345)" "$FILE"
 
-      - name: Assert freshness and reconciliation SQL
+      - name: Assert Snowflake-native quality and explicit reconciliation SQL
         run: |
           FILE="${RUNNER_TEMP}/capture-render.txt"
-          grep -qi "datediff('minute'" "$FILE"
-          grep -qi "when age_minutes > 120 then 'FAIL'" "$FILE"
+          grep -qi "data_metric_schedule = 'TRIGGER_ON_CHANGES'" "$FILE"
+          grep -qi "snowflake.core.freshness" "$FILE"
+          grep -qi "expectation freshness_warn (value <= 3600)" "$FILE"
+          grep -qi "freshness_error (value <= 7200)" "$FILE"
+          grep -qi "snowflake.local.data_quality_monitoring_expectation_status" "$FILE"
           grep -qi "count(distinct" "$FILE"
           grep -qi "min_source_timestamp" "$FILE"
           grep -qi "max_source_timestamp" "$FILE"
 
-      - name: Assert pipeline run ledger SQL
+      - name: Assert external-orchestrator run ledger SQL
         run: |
           FILE="${RUNNER_TEMP}/capture-render.txt"
           grep -qi "merge into PLATFORM_CONTROL.OPERATIONS.PIPELINE_RUN" "$FILE"
