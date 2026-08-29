@@ -16,6 +16,15 @@
 ) }}
     {%- endset -%}
 
+    {%- set standard_stream_sql -%}
+{{ enterprise_snowflake_framework.esf_standard_stream_sql(
+    'CI_HEALTH.PR_123_STAGING.PATIENT_CURRENT_STREAM',
+    'CI_HEALTH.PR_123_STAGING.PATIENT_CURRENT_SOURCE',
+    false,
+    'Consume native Snowflake row changes including updates and deletes'
+) }}
+    {%- endset -%}
+
     {%- set stream_sql -%}
 {{ enterprise_snowflake_framework.esf_append_only_stream_sql(
     'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM',
@@ -243,6 +252,7 @@
     {{ log(
         '---LATEST---\n' ~ latest_sql
         ~ '\n---SNAPSHOT_DIFF---\n' ~ diff_sql
+        ~ '\n---STANDARD_STREAM---\n' ~ standard_stream_sql
         ~ '\n---APPEND_ONLY_STREAM---\n' ~ stream_sql
         ~ '\n---TRIGGERED_TASK---\n' ~ task_sql
         ~ '\n---TASK_HISTORY---\n' ~ task_history_sql
