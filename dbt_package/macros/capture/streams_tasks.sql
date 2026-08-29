@@ -5,7 +5,11 @@
     {%- if source_relation is not string or source_relation | trim == '' -%}
         {{ exceptions.raise_compiler_error('source_relation must be a non-empty fully-qualified Snowflake identifier') }}
     {%- endif -%}
-create or alter stream {{ stream_relation }}
+-- Snowflake owns the CDC offset. Do not recreate an existing stream as part of
+-- routine deployment: recreating or replacing an offset-bearing stream can
+-- change/reset consumption semantics. Source/APPEND_ONLY changes are explicit
+-- migrations, not framework reconciliation.
+create stream if not exists {{ stream_relation }}
     on table {{ source_relation }}
     append_only = true
     show_initial_rows = {{ 'true' if show_initial_rows else 'false' }}
