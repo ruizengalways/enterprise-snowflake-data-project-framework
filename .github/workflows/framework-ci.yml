@@ -171,13 +171,20 @@ jobs:
           grep -qi "qualify row_number() over" "$FILE"
           grep -qi '"source_sequence" desc' "$FILE"
 
-      - name: Assert snapshot-diff SQL
+      - name: Assert snapshot-diff fallback SQL
         run: |
           FILE="${RUNNER_TEMP}/capture-render.txt"
           grep -qi "'INSERT' as _esf_change_type" "$FILE"
           grep -qi "'UPDATE' as _esf_change_type" "$FILE"
           grep -qi "'DELETE' as _esf_change_type" "$FILE"
           grep -qi "union all by name" "$FILE"
+
+      - name: Assert offset-safe standard Stream SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "create stream if not exists CI_HEALTH.PR_123_STAGING.PATIENT_CURRENT_STREAM" "$FILE"
+          grep -qi "on table CI_HEALTH.PR_123_STAGING.PATIENT_CURRENT_SOURCE" "$FILE"
+          grep -qi "append_only = false" "$FILE"
 
       - name: Assert offset-safe append-only Stream SQL
         run: |
