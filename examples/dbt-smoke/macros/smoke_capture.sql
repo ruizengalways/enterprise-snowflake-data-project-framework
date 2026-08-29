@@ -40,11 +40,32 @@
 ) }}
     {%- endset -%}
 
+    {%- set checkpoint_read_sql -%}
+{{ enterprise_snowflake_framework.esf_checkpoint_read_sql(
+    'HEALTH',
+    'patient',
+    'source_position'
+) }}
+    {%- endset -%}
+
+    {%- set checkpoint_advance_sql -%}
+{{ enterprise_snowflake_framework.esf_checkpoint_advance_call_sql(
+    'HEALTH',
+    'patient',
+    'source_position',
+    "object_construct('source_sequence', 12345)",
+    'batch-123',
+    'abc123'
+) }}
+    {%- endset -%}
+
     {{ log(
         '---LATEST---\n' ~ latest_sql
         ~ '\n---SNAPSHOT_DIFF---\n' ~ diff_sql
         ~ '\n---APPEND_ONLY_STREAM---\n' ~ stream_sql
-        ~ '\n---TRIGGERED_TASK---\n' ~ task_sql,
+        ~ '\n---TRIGGERED_TASK---\n' ~ task_sql
+        ~ '\n---CHECKPOINT_READ---\n' ~ checkpoint_read_sql
+        ~ '\n---CHECKPOINT_ADVANCE---\n' ~ checkpoint_advance_sql,
         info=true
     ) }}
     {{ return('capture SQL rendered') }}
