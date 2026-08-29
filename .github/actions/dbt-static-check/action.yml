@@ -1,5 +1,5 @@
 name: Validate Enterprise Snowflake dbt Project
-description: Install pinned dbt versions, resolve a CI target, install packages, and parse without connecting to Snowflake.
+description: Install pinned dbt versions, resolve a CI target, render validated metadata vars, install packages, and parse without Snowflake.
 
 inputs:
   project-code:
@@ -9,6 +9,10 @@ inputs:
     description: dbt project directory relative to the caller workspace.
     required: false
     default: dbt
+  project-root:
+    description: Metadata project root relative to the caller workspace.
+    required: false
+    default: .
 
 runs:
   using: composite
@@ -42,6 +46,15 @@ runs:
           --pr-number 1 \
           --format env >> "$GITHUB_ENV"
 
+    - name: Render validated project metadata for dbt
+      shell: bash
+      run: |
+        FRAMEWORK_ROOT="$(cd "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+        python "${FRAMEWORK_ROOT}/scripts/render_dbt_vars.py" \
+          --project-root "${GITHUB_WORKSPACE}/${{ inputs.project-root }}" \
+          --schema-dir "${FRAMEWORK_ROOT}/project_schema" \
+          > "${RUNNER_TEMP}/esf-dbt-vars.json"
+
     - name: Install dbt packages
       shell: bash
       run: |
@@ -53,5 +66,6 @@ runs:
       shell: bash
       run: |
         dbt parse --no-partial-parse \
+          --vars "$(cat "${RUNNER_TEMP}/esf-dbt-vars.json")" \
           --project-dir "${GITHUB_WORKSPACE}/${{ inputs.project-dir }}" \
           --profiles-dir "${GITHUB_WORKSPACE}/${{ inputs.project-dir }}"
