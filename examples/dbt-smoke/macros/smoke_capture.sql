@@ -59,13 +59,116 @@
 ) }}
     {%- endset -%}
 
+    {%- set freshness_sql -%}
+{{ enterprise_snowflake_framework.esf_freshness_check_sql(
+    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
+    'source_updated_at',
+    60,
+    120
+) }}
+    {%- endset -%}
+
+    {%- set reconciliation_sql -%}
+{{ enterprise_snowflake_framework.esf_reconciliation_compare_sql(
+    'CI_HEALTH.PR_123_STAGING.PATIENT_SOURCE',
+    'CI_HEALTH.PR_123_STAGING.PATIENT_TARGET',
+    'source',
+    'target',
+    ['patient_id'],
+    'source_updated_at'
+) }}
+    {%- endset -%}
+
+    {%- set run_start_sql -%}
+{{ enterprise_snowflake_framework.esf_pipeline_run_start_sql(
+    'PLATFORM_CONTROL.OPERATIONS.PIPELINE_RUN',
+    'run-123',
+    1,
+    'HEALTH',
+    'CI',
+    'patient_capture',
+    'patient',
+    'abc123'
+) }}
+    {%- endset -%}
+
+    {%- set run_finish_sql -%}
+{{ enterprise_snowflake_framework.esf_pipeline_run_finish_sql(
+    'PLATFORM_CONTROL.OPERATIONS.PIPELINE_RUN',
+    'run-123',
+    1,
+    'SUCCEEDED',
+    "object_construct('source_sequence', 12345)",
+    '100',
+    '95',
+    '10',
+    '80',
+    '5'
+) }}
+    {%- endset -%}
+
+    {%- set scd1_sql -%}
+{{ enterprise_snowflake_framework.esf_scd1_merge_sql(
+    'CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT',
+    'CI_HEALTH.PR_123_STAGING.PATIENT_CHANGES',
+    ['patient_id'],
+    ['source_sequence'],
+    'op',
+    ['D']
+) }}
+    {%- endset -%}
+
+    {%- set scd2_history_sql -%}
+{{ enterprise_snowflake_framework.esf_scd2_event_history_select(
+    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
+    ['patient_id'],
+    'source_updated_at',
+    ['source_updated_at', 'source_sequence'],
+    'record_hash',
+    'op',
+    ['D']
+) }}
+    {%- endset -%}
+
+    {%- set scd2_rebuild_sql -%}
+{{ enterprise_snowflake_framework.esf_scd2_rebuild_affected_keys_sql(
+    'CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
+    'CI_HEALTH.PR_123_STAGING.PATIENT_AFFECTED_KEYS',
+    ['patient_id'],
+    'source_updated_at',
+    ['source_updated_at', 'source_sequence'],
+    'record_hash',
+    'op',
+    ['D']
+) }}
+    {%- endset -%}
+
+    {%- set scd2_snapshot_sql -%}
+{{ enterprise_snowflake_framework.esf_scd2_snapshot_apply_sql(
+    'CI_HEALTH.PR_123_CANONICAL.PATIENT_SNAPSHOT_HISTORY',
+    'CI_HEALTH.PR_123_STAGING.PATIENT_SNAPSHOT',
+    ['patient_id'],
+    'record_hash',
+    "to_timestamp_tz('2026-08-29 00:00:00 +00:00')"
+) }}
+    {%- endset -%}
+
     {{ log(
         '---LATEST---\n' ~ latest_sql
         ~ '\n---SNAPSHOT_DIFF---\n' ~ diff_sql
         ~ '\n---APPEND_ONLY_STREAM---\n' ~ stream_sql
         ~ '\n---TRIGGERED_TASK---\n' ~ task_sql
         ~ '\n---CHECKPOINT_READ---\n' ~ checkpoint_read_sql
-        ~ '\n---CHECKPOINT_ADVANCE---\n' ~ checkpoint_advance_sql,
+        ~ '\n---CHECKPOINT_ADVANCE---\n' ~ checkpoint_advance_sql
+        ~ '\n---FRESHNESS---\n' ~ freshness_sql
+        ~ '\n---RECONCILIATION---\n' ~ reconciliation_sql
+        ~ '\n---RUN_START---\n' ~ run_start_sql
+        ~ '\n---RUN_FINISH---\n' ~ run_finish_sql
+        ~ '\n---SCD1---\n' ~ scd1_sql
+        ~ '\n---SCD2_HISTORY---\n' ~ scd2_history_sql
+        ~ '\n---SCD2_REBUILD---\n' ~ scd2_rebuild_sql
+        ~ '\n---SCD2_SNAPSHOT---\n' ~ scd2_snapshot_sql,
         info=true
     ) }}
     {{ return('capture SQL rendered') }}
