@@ -197,6 +197,11 @@ jobs:
           grep -qi "MISSING_EXPECTED" "$FILE"
           grep -qi "UNEXPECTED_ACTUAL" "$FILE"
           grep -qi "union all by name" "$FILE"
+          grep -Eqi "\)[[:space:]]+as events" "$FILE"
+          if grep -Eqi "as fixture[[:space:]]+as events" "$FILE"; then
+            echo "Fixture relation must not carry an alias before the SCD macro adds AS events." >&2
+            exit 1
+          fi
           # Delete boundaries participate in ordering even though tombstones are
           # not materialized as target history rows, so A's reinsert is ordinal 4.
           grep -Eqi "\('A',[[:space:]]*'a3',[[:space:]]*50,.*true,[[:space:]]*4\)" "$FILE"
