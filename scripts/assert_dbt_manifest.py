@@ -15,6 +15,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--materialized")
     parser.add_argument("--incremental-strategy")
     parser.add_argument("--unique-key")
+    parser.add_argument("--pre-hook-contains")
     return parser.parse_args()
 
 
@@ -47,6 +48,14 @@ def main() -> None:
         actual = config.get(key)
         if actual != expected:
             raise SystemExit(f"dbt config mismatch for {key}: expected {expected!r}, got {actual!r}")
+
+    if args.pre_hook_contains is not None:
+        hooks = config.get("pre-hook", config.get("pre_hook", []))
+        rendered = json.dumps(hooks, sort_keys=True)
+        if args.pre_hook_contains.lower() not in rendered.lower():
+            raise SystemExit(
+                f"dbt pre-hook does not contain {args.pre_hook_contains!r}: {rendered}"
+            )
 
     print(f"dbt manifest assertion passed: {args.database}.{args.schema}.{args.model}")
 
