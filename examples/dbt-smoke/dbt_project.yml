@@ -1,0 +1,14 @@
+name: esf_dbt_smoke
+version: 1.0.0
+config-version: 2
+profile: esf_dbt_smoke
+
+model-paths:
+  - models
+macro-paths:
+  - macros
+
+models:
+  esf_dbt_smoke:
+    staging:
+      +schema: STAGING
