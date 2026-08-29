@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enterprise-snowflake.example/schemas/dataset.schema.json",
+  "title": "Enterprise Snowflake Dataset Metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "dataset"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "owner_team", "raw_contract", "load_strategy", "implementation"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{1,63}$"
+        },
+        "owner_team": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "raw_contract": {
+          "type": "string",
+          "pattern": "^contracts/raw/[A-Za-z0-9_.-]+\\.ya?ml$"
+        },
+        "load_strategy": {
+          "enum": [
+            "full_refresh",
+            "append_only",
+            "incremental_merge",
+            "scd2_snapshot",
+            "scd2_merge",
+            "scd2_stream_task"
+          ]
+        },
+        "implementation": {
+          "enum": ["standard", "custom"]
+        },
+        "business_key": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "watermark_column": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "freshness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["warn_after_minutes", "error_after_minutes"],
+          "properties": {
+            "warn_after_minutes": {"type": "integer", "minimum": 1},
+            "error_after_minutes": {"type": "integer", "minimum": 1}
+          }
+        },
+        "reconciliation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "measures": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "row_count",
+                  "distinct_business_key",
+                  "min_max_source_timestamp"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
