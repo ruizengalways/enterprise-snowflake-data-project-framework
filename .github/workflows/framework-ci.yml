@@ -194,3 +194,11 @@ jobs:
           grep -qi "task_auto_retry_attempts = 1" "$FILE"
           grep -qi "suspend_task_after_num_failures = 3" "$FILE"
           grep -qi "alter task CI_HEALTH.PR_123_STAGING.PROCESS_PATIENT_EVENT resume" "$FILE"
+
+      - name: Assert checkpoint SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "from PLATFORM_CONTROL.OPERATIONS.PIPELINE_CHECKPOINT" "$FILE"
+          grep -qi "checkpoint_kind = 'source_position'" "$FILE"
+          grep -qi "call PLATFORM_CONTROL.OPERATIONS.ADVANCE_PIPELINE_CHECKPOINT" "$FILE"
+          grep -qi "object_construct('source_sequence', 12345)" "$FILE"
