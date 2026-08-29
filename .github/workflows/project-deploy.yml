@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       git_sha:
-        description: "Immutable 40-character project Git commit SHA to deploy."
+        description: "Immutable 40-character project Git commit SHA from main history to deploy."
         required: true
         type: string
       framework_ref:
@@ -36,8 +36,6 @@ jobs:
     environment: ${{ inputs.environment }}
 
     env:
-      SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
-      SNOWFLAKE_OIDC_AUDIENCE: ${{ vars.SNOWFLAKE_OIDC_AUDIENCE }}
       DBT_AUTHENTICATOR: workload_identity
       DBT_DEFAULT_SCHEMA: STAGING
       ESF_ENVIRONMENT: ${{ inputs.environment }}
@@ -63,21 +61,52 @@ jobs:
             echo "framework_ref must be a full lowercase 40-character immutable Git commit SHA" >&2
             exit 1
           fi
-          if [[ -z "${SNOWFLAKE_ACCOUNT:-}" || -z "${SNOWFLAKE_OIDC_AUDIENCE:-}" ]]; then
+
+      - name: Load approved Snowflake environment configuration
+        shell: bash
+        env:
+          ESF_SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+          ESF_SNOWFLAKE_OIDC_AUDIENCE: ${{ vars.SNOWFLAKE_OIDC_AUDIENCE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ESF_SNOWFLAKE_ACCOUNT:-}" || -z "${ESF_SNOWFLAKE_OIDC_AUDIENCE:-}" ]]; then
             echo "GitHub Environment ${{ inputs.environment }} must define SNOWFLAKE_ACCOUNT and SNOWFLAKE_OIDC_AUDIENCE." >&2
             exit 1
           fi
-          if [[ "${SNOWFLAKE_OIDC_AUDIENCE}" == "snowflakecomputing.com" ]]; then
+          if [[ "${ESF_SNOWFLAKE_OIDC_AUDIENCE}" == "snowflakecomputing.com" ]]; then
             echo "Use an account-scoped Snowflake OIDC audience, not snowflakecomputing.com." >&2
             exit 1
           fi
+          echo "SNOWFLAKE_ACCOUNT=${ESF_SNOWFLAKE_ACCOUNT}" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_OIDC_AUDIENCE=${ESF_SNOWFLAKE_OIDC_AUDIENCE}" >> "${GITHUB_ENV}"
 
-      - name: Checkout immutable project revision
+      - name: Checkout project main history
         uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ inputs.git_sha }}
+          ref: main
+          fetch-depth: 0
           persist-credentials: false
           path: project
+
+      - name: Verify and checkout immutable project revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested_sha="${{ inputs.git_sha }}"
+          if ! git -C project cat-file -e "${requested_sha}^{commit}" 2>/dev/null; then
+            echo "Requested git_sha does not exist in the checked-out main history." >&2
+            exit 1
+          fi
+          if ! git -C project merge-base --is-ancestor "${requested_sha}" HEAD; then
+            echo "git_sha must be reachable from the current main branch history." >&2
+            exit 1
+          fi
+          git -C project checkout --detach "${requested_sha}"
+          project_sha="$(git -C project rev-parse HEAD)"
+          if [[ "${project_sha}" != "${requested_sha}" ]]; then
+            echo "Project checkout does not match requested git_sha." >&2
+            exit 1
+          fi
 
       - name: Checkout immutable framework revision
         uses: actions/checkout@v7.0.1
@@ -87,16 +116,11 @@ jobs:
           persist-credentials: false
           path: framework
 
-      - name: Verify immutable revisions and framework package pin
+      - name: Verify framework revision and package pin
         shell: bash
         run: |
           set -euo pipefail
-          project_sha="$(git -C project rev-parse HEAD)"
           framework_sha="$(git -C framework rev-parse HEAD)"
-          if [[ "${project_sha}" != "${{ inputs.git_sha }}" ]]; then
-            echo "Project checkout does not match requested git_sha." >&2
-            exit 1
-          fi
           if [[ "${framework_sha}" != "${{ inputs.framework_ref }}" ]]; then
             echo "Framework checkout does not match requested framework_ref." >&2
             exit 1
