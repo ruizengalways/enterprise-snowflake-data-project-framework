@@ -4,9 +4,20 @@ This catalog maps common enterprise source-capture patterns to a small reusable 
 
 The contract is deliberately technical. Source-specific business semantics remain explicit in the project repository.
 
+## Terminology
+
+The canonical project layer name is **RAW**. This document does not introduce separate Bronze/Silver physical layers.
+
+```text
+external source
+  -> project-owned authoritative RAW evidence
+  -> staging / intermediate / canonical consumers
+  -> marts / semantic
+```
+
 ## Design rule
 
-Every pattern has a **classic Snowflake** implementation. Dynamic Tables are optional accelerators/alternate execution engines, never the only production path.
+Every pattern has a classic Snowflake implementation. Dynamic Tables are optional accelerators/alternate execution engines, never the only production path.
 
 ```text
 classic baseline
@@ -20,9 +31,9 @@ optional
   DYNAMIC TABLE
 ```
 
-## Common metadata carried into Bronze
+## Common metadata carried into RAW
 
-Use the subset that applies to the source:
+Use only the subset that applies to the source:
 
 ```text
 _esf_batch_id
@@ -51,12 +62,12 @@ Do not fabricate source ordering. `_esf_source_sequence` exists only when the so
 - daily CSV export containing the complete entity
 - API full listing
 
-### Authoritative Bronze
+### Authoritative RAW
 
-Append every snapshot batch:
+Append every complete snapshot batch:
 
 ```text
-BRONZE_<ENTITY>_SNAPSHOT
+RAW_<ENTITY>_SNAPSHOT
   snapshot_id
   snapshot_at
   batch_id
@@ -66,38 +77,38 @@ BRONZE_<ENTITY>_SNAPSHOT
   ingested_at
 ```
 
-Do not make an overwrite/current table the only Bronze copy when delete inference, SCD2, reconciliation or recovery is required.
+Do not make an overwrite/current table the only RAW copy when delete inference, SCD2, reconciliation or recovery is required.
 
 ### Classic current projection
 
 ```text
 snapshot append table
   -> task/dbt model selects latest complete snapshot
-  -> MERGE or transactional replace into BRONZE_<ENTITY>_CURRENT
+  -> MERGE or transactional replace into current projection
 ```
 
 ### Classic diff
 
-Compare snapshot N against N-1 on the business key and record hash:
+Compare snapshot N against N-1 on business key and record hash:
 
 ```text
-N only          -> INSERT
+N only                -> INSERT
 N and N-1 hash differs -> UPDATE
-N-1 only        -> inferred DELETE
+N-1 only              -> inferred DELETE
 ```
 
 Materialize the diff as append-only evidence before applying it to current/SCD targets.
 
 ### Dynamic Table option
 
-A Dynamic Table may expose the latest snapshot/current projection or a declarative diff when the query incrementally refreshes efficiently.
+A Dynamic Table may expose latest-snapshot/current projection or a declarative diff when incremental refresh is appropriate.
 
-Do not rely on it as the only history store. Snapshot retention remains in a normal table.
+Do not rely on it as the only history store. Snapshot evidence remains in a normal table.
 
-### Silver
+### Downstream guarantee
 
 - SCD1: latest snapshot/current projection.
-- SCD2: snapshot-grain history. Changes that happen multiple times between snapshots cannot be reconstructed.
+- SCD2: snapshot-grain history. Multiple source changes between snapshots cannot be reconstructed.
 
 ---
 
@@ -109,7 +120,7 @@ Do not rely on it as the only history store. Snapshot retention remains in a nor
 - timestamp plus overlap window
 - monotonically increasing source version
 
-### Authoritative Bronze
+### Authoritative RAW
 
 Preferred when replay/history matters:
 
@@ -117,7 +128,7 @@ Preferred when replay/history matters:
 append observed source versions
 ```
 
-A current MERGE table can be maintained alongside the append evidence.
+A current MERGE table can be maintained alongside retained evidence.
 
 ### Checkpoint
 
@@ -129,7 +140,7 @@ For lookback:
 next_extract_start = last_successful_watermark - lookback_interval
 ```
 
-The framework must not advance the checkpoint until the target transaction is successful.
+Do not advance the checkpoint until target processing succeeds.
 
 ### Deduplication
 
@@ -146,20 +157,18 @@ Never dedupe only by ingestion timestamp.
 ### Classic implementation
 
 ```text
-landing/observations
+RAW observations
  -> QUALIFY ROW_NUMBER over source key/version
  -> MERGE current target
  -> commit
- -> update checkpoint
+ -> update source checkpoint
 ```
 
 ### Dynamic Table option
 
-Useful for declarative latest-row/current projections when incremental refresh is performant.
+Useful for declarative latest-row/current projections when incremental refresh is performant. External/source watermark extraction remains explicit runtime state.
 
-Checkpoint extraction itself remains explicit; Dynamic Tables do not replace the external/source watermark contract.
-
-### Silver
+### Downstream guarantee
 
 - SCD1: reliable for captured rows.
 - SCD2: observed-version history only.
@@ -175,7 +184,7 @@ Checkpoint extraction itself remains explicit; Dynamic Tables do not replace the
 - CDC API returning one final row per key per polling window
 - native CDC net-change mode
 
-### Authoritative Bronze
+### Authoritative RAW
 
 Append each captured net-change batch before merging current state:
 
@@ -187,14 +196,14 @@ source position/version
 payload
 ```
 
-This preserves what the source actually delivered while acknowledging that intermediate changes may already have been collapsed upstream.
+This preserves what the source delivered while acknowledging that intermediate source changes may already have been collapsed upstream.
 
 ### Classic implementation
 
 ```text
 append batch
  -> dedupe by source position + business key
- -> MERGE SCD1/current
+ -> MERGE current
       matched DELETE/tombstone -> DELETE or soft-delete
       matched update           -> UPDATE
       not matched insert       -> INSERT
@@ -206,7 +215,7 @@ A standard Snowflake Stream may trigger downstream processing, but it does not i
 
 Dynamic Table current projections are possible for declarative logic. Use classic Task/MERGE when explicit delete/upsert logic, retries or transaction boundaries matter.
 
-### Silver
+### Downstream guarantee
 
 - SCD1: yes.
 - SCD2: batch/net-change fidelity only; not full transaction history.
@@ -223,7 +232,7 @@ Dynamic Table current projections are possible for declarative logic. Use classi
 - Delta Change Data Feed
 - business event streams
 
-### Authoritative Bronze
+### Authoritative RAW
 
 Always append immutable source events.
 
@@ -239,9 +248,9 @@ Delta commit version + row identity
 
 ### Important Snowflake Stream rule
 
-A Snowflake standard Stream is a net-delta consumer between offsets, not an audit log. Do not land full CDC into a mutable current table and expect a Stream on that table to recreate every source transition.
+A Snowflake standard Stream is an offset-based change consumer over a Snowflake source object, not an audit log. Do not land full CDC into only a mutable current table and expect a Stream on that table to recreate every source transition.
 
-Land events first; optionally put an append-only Stream on the event table to drive processing.
+Land immutable events first; optionally put an append-only Stream on the event table to drive processing.
 
 ### Classic SCD1
 
@@ -255,15 +264,15 @@ append event table
 
 ### Classic SCD2
 
-Process ordered events by business key and source sequence. Handle insert/update/delete explicitly and preserve source event ordering in test fixtures.
+Process ordered events by business key and source sequence. Handle insert/update/delete explicitly and preserve source ordering in test fixtures.
 
 ### Dynamic Table option
 
-Good for declarative projections over immutable event evidence when query shape and refresh economics are acceptable.
+Good for declarative current/SCD1-style projections over immutable event evidence when query shape and refresh economics are acceptable.
 
-Do not use a Stream on a Dynamic Table for full audit history; multiple state changes can collapse into net changes between refresh/consumption points.
+Do not use a Stream on a Dynamic Table as full audit history; net changes can collapse multiple transitions between refresh/consumption points.
 
-### Silver
+### Downstream guarantee
 
 - SCD1: yes.
 - SCD2: full fidelity when source ordering and event completeness are reliable.
@@ -289,7 +298,7 @@ Use record hashes only as an optimization/classifier; business keys remain the j
 
 ### Dynamic Table option
 
-Possible as a declarative diff/current layer. Keep normal-table snapshots so the logic can be rebuilt without relying on Dynamic Table retention or refresh state.
+Possible as a declarative diff/current layer. Keep normal-table snapshots so the logic can be rebuilt without relying on Dynamic Table refresh state.
 
 ### Fidelity
 
@@ -319,7 +328,7 @@ Preferred Snowflake-native components:
 stage
 + Snowpipe or COPY INTO
 + file metadata columns
-+ normal Bronze table
++ regular RAW table
 ```
 
 Persist useful file metadata:
@@ -332,13 +341,13 @@ METADATA$FILE_LAST_MODIFIED
 METADATA$START_SCAN_TIME
 ```
 
-File identity for framework dedupe/reconciliation should include file path/name plus content key when modified-file handling matters. Snowpipe's built-in duplicate-file protection is useful but must not be treated as a permanent enterprise idempotency ledger because its behavior/history is pipe-scoped and time-bounded.
+File identity for framework dedupe/reconciliation should include file path/name plus content key when modified-file handling matters. Snowpipe duplicate-file protection is useful but must not be treated as a permanent enterprise idempotency ledger.
 
-A directory table can expose `RELATIVE_PATH`, `MD5`, `ETAG`, size and last-modified metadata when file discovery/reconciliation needs it.
+A directory table can expose path/checksum/size/last-modified metadata when file discovery or reconciliation needs it.
 
 ### Dynamic Table option
 
-Useful downstream of the landed file/API evidence, not as a replacement for cursor/file-ingestion state.
+Useful downstream of landed file/API evidence, not as a replacement for cursor/file-ingestion state.
 
 ---
 
@@ -359,7 +368,7 @@ The framework must reject claims that exceed this matrix.
 
 Use Dynamic Tables only when all of the following hold:
 
-1. the transformation is primarily declarative SQL;
+1. transformation is primarily declarative SQL;
 2. supported incremental constructs fit the query;
 3. refresh volume is economical;
 4. reinitialization behavior is acceptable;
@@ -370,26 +379,16 @@ Production guidance:
 
 ```text
 prefer explicit REFRESH_MODE
-INCREMENTAL -> when change volume/query shape suits it
-FULL        -> when large change volume or unsupported incremental constructs make full scan clearer
-ADAPTIVE    -> optional for mixed append/bulk patterns after testing
-AUTO        -> exploration, not the framework default
+ADAPTIVE    -> preferred mixed incremental/bulk pattern when query is incrementalizable
+INCREMENTAL -> small change volume/query shape suits it
+FULL        -> unsupported incremental constructs or consistently high change volume
+AUTO        -> exploration, not framework production default
 ```
 
-If a Dynamic Table has a defect or performance regression, switch execution engine without changing the RAW/Silver contract.
+If a Dynamic Table has a defect or performance regression, switch execution engine without changing the RAW/downstream contract.
 
 # Retry / recovery baseline
 
-Classic Task graphs can use:
+Classic Task graphs can use native retry/suspension/history controls. Triggered Tasks can use `WHEN SYSTEM$STREAM_HAS_DATA(...)` so unpredictable arrival does not require frequent warehouse polling.
 
-```text
-TASK_AUTO_RETRY_ATTEMPTS
-SUSPEND_TASK_AFTER_NUM_FAILURES
-EXECUTE TASK ... RETRY LAST
-finalizer task
-TASK_HISTORY / COMPLETE_TASK_GRAPHS
-```
-
-Triggered Tasks can use `WHEN SYSTEM$STREAM_HAS_DATA(...)` so unpredictable arrival does not require frequent warehouse polling.
-
-Recovery remains deterministic: replay Bronze evidence from a checkpoint/batch/source position rather than manually editing derived production data.
+Recovery remains deterministic: replay retained RAW evidence from a checkpoint/batch/source position rather than manually editing derived production data.
