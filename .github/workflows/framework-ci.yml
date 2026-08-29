@@ -78,7 +78,7 @@ jobs:
           dbt parse --no-partial-parse \
             --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
 
-      - name: Assert model routing and standard loads
+      - name: Assert model routing, standard loads and behavior test discovery
         run: |
           MANIFEST=examples/dbt-smoke/target/manifest.json
           python scripts/assert_dbt_manifest.py \
@@ -103,6 +103,12 @@ jobs:
             --manifest "$MANIFEST" --model smoke_capture_dynamic_table \
             --database CI_HEALTH --schema PR_123_STAGING \
             --pre-hook-contains "refresh_mode = INCREMENTAL"
+          jq -e '
+            .nodes
+            | to_entries
+            | map(select(.value.resource_type == "test" and .value.name == "scd2_behavior"))
+            | length == 1
+          ' "$MANIFEST" >/dev/null
 
       - name: Render framework SQL without connecting to Snowflake
         run: |
