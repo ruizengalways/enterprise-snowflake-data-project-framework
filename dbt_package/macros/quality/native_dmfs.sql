@@ -35,6 +35,9 @@ alter {{ kind | lower }} {{ relation }}
     {%- if kind == 'VIEW' and timestamp_column is none -%}
         {{ exceptions.raise_compiler_error('Snowflake FRESHNESS on a view requires a timestamp column') }}
     {%- endif -%}
+-- Deployment-time association DDL. Snowflake permits only one DMF of the same
+-- kind on the same argument set, so inspect DATA_METRIC_FUNCTION_REFERENCES
+-- before applying this to an already-governed object.
 alter {{ kind | lower }} {{ relation }}
     add data metric function snowflake.core.freshness
     on ({% if timestamp_column is not none %}{{ adapter.quote(timestamp_column) }}{% endif %})
@@ -59,6 +62,36 @@ alter {{ kind | lower }} {{ relation }}
 {%- if minimum_unique_count is not none %}
     expectation {{ expectation_name }} (value >= {{ minimum_unique_count | int }})
 {%- endif %}
+{%- endmacro %}
+
+{% macro esf_native_dmf_references_sql(relation, object_type='TABLE') -%}
+    {%- set kind = object_type | upper -%}
+    {%- if kind not in ['TABLE', 'VIEW'] -%}
+        {{ exceptions.raise_compiler_error('object_type must be TABLE or VIEW') }}
+    {%- endif -%}
+select *
+from table(
+    information_schema.data_metric_function_references(
+        ref_entity_name => '{{ relation | replace("'", "''") }}',
+        ref_entity_domain => '{{ kind }}'
+    )
+)
+order by metric_database_name, metric_schema_name, metric_name
+{%- endmacro %}
+
+{% macro esf_native_dmf_expectations_sql(relation, object_type='TABLE') -%}
+    {%- set kind = object_type | upper -%}
+    {%- if kind not in ['TABLE', 'VIEW'] -%}
+        {{ exceptions.raise_compiler_error('object_type must be TABLE or VIEW') }}
+    {%- endif -%}
+select *
+from table(
+    information_schema.data_metric_function_expectations(
+        ref_entity_name => '{{ relation | replace("'", "''") }}',
+        ref_entity_domain => '{{ kind }}'
+    )
+)
+order by metric_database_name, metric_schema_name, metric_name, expectation_name
 {%- endmacro %}
 
 {% macro esf_native_dmf_expectation_status_sql(relation, object_type='TABLE') -%}
