@@ -6,7 +6,8 @@
     hash_column,
     operation_column=none,
     delete_values=[],
-    key_filter_relation=none
+    key_filter_relation=none,
+    key_filter_query=none
 ) -%}
     {%- set keys = enterprise_snowflake_framework.esf_require_columns(key_columns, 'key_columns') -%}
     {%- set ordering = enterprise_snowflake_framework.esf_require_columns(order_columns, 'order_columns') -%}
@@ -15,6 +16,9 @@
     {%- endif -%}
     {%- if delete_values is string -%}
         {{ exceptions.raise_compiler_error('delete_values must be a list') }}
+    {%- endif -%}
+    {%- if key_filter_relation is not none and key_filter_query is not none -%}
+        {{ exceptions.raise_compiler_error('provide only one of key_filter_relation or key_filter_query') }}
     {%- endif -%}
 
 with ordered_events as (
@@ -74,6 +78,14 @@ with ordered_events as (
     where exists (
         select 1
         from {{ key_filter_relation }} as affected
+        where {{ enterprise_snowflake_framework.esf_equal_keys('events', 'affected', keys) }}
+    )
+    {%- elif key_filter_query is not none %}
+    where exists (
+        select 1
+        from (
+            {{ key_filter_query }}
+        ) as affected
         where {{ enterprise_snowflake_framework.esf_equal_keys('events', 'affected', keys) }}
     )
     {%- endif %}
