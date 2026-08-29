@@ -6,49 +6,50 @@ Versioned golden path for Snowflake data-project repositories.
 
 Implement reusable technical behaviour once so Health, Transport and future domains do not copy/paste or independently reimplement platform mechanics.
 
-Shared mechanics belong here when a bug fix would otherwise require coordinated edits across every project repo. Business joins, calculations, source predicates and domain rules remain explicit project SQL/code.
+Shared mechanics belong here when a bug fix would otherwise require coordinated edits across project repos. Business joins, calculations, source predicates and domain rules remain explicit project SQL/code.
 
-## Current executable baseline
+## Current capability baseline
+
+Significant implementation areas:
 
 ```text
 src/enterprise_snowflake_framework/
-├── workspaces.py
-├── query_tags.py
-├── metadata_validation.py
-├── targets.py
-├── dbt_context.py
-└── dbt_vars.py
-
 project_schema/
-├── project.schema.json
-├── dataset.schema.json
-└── raw_contract.schema.json
-
+validation/
 scripts/
-├── render_workspace_sql.py
-├── render_query_tag.py
-├── resolve_dbt_target.py
-├── render_dbt_vars.py
-├── render_dbt_context.py
-└── assert_dbt_manifest.py
-
 dbt_package/macros/
-├── environment/targets.sql
-├── loading/strategies.sql
-└── capture/
-    ├── primitives.sql
-    └── dynamic_tables.sql
-
-docs/patterns/capture-archetypes.md
-
+dbt_package/tests/
+examples/
+tests/
+docs/patterns/
 .github/actions/
-├── validate-metadata/action.yml
-└── dbt-static-check/action.yml
-
 .github/workflows/
-├── framework-ci.yml
-└── pr-workspace.yml
 ```
+
+Reusable capabilities now include:
+
+```text
+workspace naming + guarded lifecycle SQL
+canonical QUERY_TAG construction
+dbt physical target/context resolution
+project/dataset/RAW metadata validation
+metadata -> dbt vars bridge
+full_refresh / append_only / incremental_merge config
+capture archetype helpers
+checkpoint/runtime ledger helpers
+freshness/reconciliation/check-result helpers
+SCD1 merge
+SCD2 snapshot
+SCD2 immutable-event affected-key rebuild
+SCD2 Stream + Triggered Task orchestration
+SCD2 invariant tests + deterministic behavior oracle
+optional Dynamic Table projection wrappers
+reusable metadata/dbt static CI
+reusable PR workspace workflow
+reusable immutable project deployment workflow
+```
+
+The repository tree is the authority for individual implementation files; this README deliberately avoids maintaining an exhaustive file list.
 
 ## Workspace + execution context
 
@@ -59,20 +60,20 @@ PR CI:        PR_<NUMBER>_<LAYER>
 
 The target/context renderer derives database, warehouse, schema prefix and canonical run-level QUERY_TAG. Project model SQL uses `ref()` / `source()` rather than hard-coded DEV/UAT/PROD names.
 
-Current stable reference:
+Current dbt baseline:
 
 ```text
 dbt-core      1.12.3
 dbt-snowflake 1.12.0
 ```
 
-Machine profiles use Snowflake workload identity + OIDC + short-lived tokens. No passwords/private keys belong in project profiles.
+Machine profiles use Snowflake workload identity/OIDC with short-lived tokens. Passwords/private keys do not belong in project profiles.
 
 ## Project and RAW capture contracts
 
-Version 1 schemas cover project identity, dataset technical behavior and project-owned RAW contracts.
+Version 1 schemas cover project identity, dataset technical behaviour and project-owned RAW contracts.
 
-Dataset metadata includes:
+Dataset metadata includes bounded technical fields such as:
 
 ```text
 raw_contract
@@ -84,18 +85,9 @@ freshness
 reconciliation
 ```
 
-RAW contracts can classify source capture with a bounded block:
+RAW contracts classify source capture independently from downstream target strategy.
 
-```yaml
-capture:
-  archetype: full_change
-  fidelity: full_change
-  checkpoint_kind: source_position
-  ordering_columns: [source_sequence]
-  idempotency_columns: [patient_id, source_sequence]
-```
-
-Supported archetypes:
+Supported capture archetypes:
 
 ```text
 snapshot
@@ -115,129 +107,124 @@ full_change
 full_event
 ```
 
-Validator rules deliberately prevent overstating source fidelity. It validates archetype/fidelity/checkpoint compatibility, lookback usage, declared ordering/idempotency columns, non-null business keys and snapshot-diff delete semantics.
+Metadata validation checks archetype/fidelity/checkpoint compatibility, deterministic ordering/idempotency fields, key nullability, freshness/reconciliation structure and SCD/capture compatibility.
 
-Metadata remains bounded technical metadata. It does **not** contain MERGE SQL, task graphs, arbitrary predicates or workflow branching.
+Metadata remains bounded technical metadata. It does **not** contain MERGE SQL, task graphs, arbitrary predicates, business formulas or workflow branching.
 
-See `docs/patterns/capture-archetypes.md` and platform ADR-031.
+See `docs/patterns/capture-archetypes.md`, `docs/patterns/source-capture-matrix.md` and platform ADR-031.
 
-## Classic Snowflake first; Dynamic Tables optional
+## Snowflake-native first; Dynamic Tables optional
 
-Every reusable pattern has a non-Dynamic-Table path using native Snowflake objects:
+Classic/native primitives are the reliability baseline:
 
 ```text
 TABLE
-STREAM / CHANGES where useful
-TASK / triggered TASK / task graph
+STREAM / CHANGES
+TASK / Triggered Task / task graph
 MERGE / INSERT / DELETE
 Snowflake Scripting
 Time Travel / CLONE
 ```
 
-Dynamic Tables are optional alternate engines for declarative projections after performance/operability proof. They are never the only implementation and are not the canonical SCD2 mechanism.
+Dynamic Tables are optional declarative execution/projection choices. They are not the canonical SCD2 implementation and never become the only supported path.
 
-Authoritative RAW is replayable evidence when history, delete inference or recovery matters:
+Production Dynamic Table refresh mode is explicit; the framework does not default to `AUTO`.
+
+Authoritative RAW remains replayable evidence when history/delete inference/recovery matters:
 
 - full snapshots are retained as append snapshot batches before latest/diff projections;
-- full CDC/events are appended to normal tables before current-state merges;
-- Snowflake Streams are consumers/offsets, not full source-history storage;
-- source cursor/watermark/file progress remains explicit runtime state.
+- full CDC/events are appended to regular tables before Stream consumers/current-state merges;
+- Streams own processing offsets but are not complete source-history storage;
+- source cursor/watermark/file progress remains explicit runtime control state.
 
-## Executable capture SQL primitives
+See `docs/patterns/snowflake-native-first.md`.
 
-The dbt package now provides reusable classic primitives:
+## Runtime state and quality boundary
 
-```text
-esf_latest_observation
-  -> deterministic latest row per business/idempotency key
-  -> useful for watermark lookback, net CDC and SCD1 current projection
+Mutable runtime progress does not live in Git metadata.
 
-esf_snapshot_diff
-  -> compares snapshot N vs N-1
-  -> emits INSERT / UPDATE / DELETE using business key + record hash
-
-esf_merge_current_state_sql
-  -> Snowflake MERGE
-  -> optional tombstone/delete branch
-  -> UPDATE ALL BY NAME / INSERT ALL BY NAME for same-shape Bronze current projections
-```
-
-The project still owns the actual SELECT/source predicate and domain semantics.
-
-Optional declarative projection wrapper:
+Platform-owned operational state includes:
 
 ```text
-esf_dynamic_table_projection_sql
+PLATFORM_CONTROL.OPERATIONS.PIPELINE_CHECKPOINT
+PLATFORM_CONTROL.OPERATIONS.PIPELINE_RUN
+PLATFORM_CONTROL.OPERATIONS.PIPELINE_CHECK_RESULT
+PLATFORM_CONTROL.OPERATIONS.ADVANCE_PIPELINE_CHECKPOINT(...)
 ```
 
-It requires an explicit production refresh mode:
+Framework macros render the corresponding read/start/finish/check/reconciliation calls. Custom state is limited to information Snowflake does not already own; Stream offsets are not duplicated into a parallel custom offset ledger.
+
+## SCD consumers
+
+SCD is downstream of capture fidelity.
+
+Implemented reusable paths:
 
 ```text
-INCREMENTAL | FULL | ADAPTIVE
+SCD1
+  esf_scd1_merge_sql()
+
+SCD2 snapshot
+  esf_scd2_snapshot_apply_sql()
+
+SCD2 full change/event
+  esf_scd2_event_history_select()
+  esf_scd2_rebuild_affected_keys_sql()
+
+SCD2 Stream + Triggered Task
+  esf_scd2_stream_task_sql()
 ```
 
-`AUTO` is intentionally not a framework production default. `CUSTOM_INCREMENTAL` is a separate DML contract and is not silently substituted for the classic implementation.
+The correctness-first event path rebuilds only affected business keys from immutable ordered event history, allowing duplicate replay and late/out-of-order events to repair target history.
 
-## Basic standard load strategies
-
-A standard model identifies its governed dataset:
-
-```jinja
-{{ enterprise_snowflake_framework.esf_configure_dataset('vehicle_position') }}
-```
-
-The framework currently maps:
+Reusable SCD2 invariants cover:
 
 ```text
-full_refresh      -> table
-append_only       -> incremental + append
-incremental_merge -> incremental + merge + metadata business key
+at most one current row per key
+valid version ranges
+no overlapping ranges
+unique deterministic version ordinal
 ```
 
-`append_only` does not invent a source/checkpoint predicate. The selected rows are the rows appended.
+A deterministic SQL behavior oracle covers duplicate replay, no-op state, updates, delete/reinsert gaps, late events and ordering ties. Framework CI proves parse/render/discovery; live Snowflake execution remains a DEV gate.
 
-The basic macro deliberately rejects:
-
-```text
-implementation: custom
-scd2_snapshot
-scd2_merge
-scd2_stream_task
-```
-
-Dedicated SCD2 implementations and invariant tests remain separate work.
-
-## Runtime checkpoint boundary
-
-Mutable capture progress does not live in Git metadata. The platform repository now owns the first real `PLATFORM_CONTROL.OPERATIONS` consumer:
-
-```text
-PIPELINE_CHECKPOINT
-ADVANCE_PIPELINE_CHECKPOINT(...)
-```
-
-The same runtime contract can hold watermark, cursor, LSN/source position, event offset, snapshot ID or file identity. Advance it only after successful target processing; when atomicity is required, target DML and checkpoint advancement belong in the same explicit transaction/Snowflake Scripting unit.
-
-## Query tags
-
-Canonical compact JSON `QUERY_TAG` fields:
-
-```text
-required: project, environment, workload
-optional: source, pipeline, dataset, run_id, git_sha, pr_number, operation
-```
-
-The dbt context carries a run-level tag and dataset vars can carry model-level tags. Do not put personal, secret, regulated or business-payload data in query tags.
-
-## CI proof
-
-Framework CI validates Python metadata/context utilities, pinned dbt installation, offline parse/compile, physical target resolution, basic load config and generated capture SQL. Capture smoke models cover tombstone MERGE, latest-observation dedupe, snapshot diff, and the explicit-mode Dynamic Table wrapper.
-
-This is source/compile proof. Live Snowflake execution, concurrency, performance and recovery behavior still require real DEV infrastructure.
+See `docs/patterns/scd-consumers.md` and platform ADR-035.
 
 ## Reusable PR workspace workflow
 
-`.github/workflows/pr-workspace.yml` creates/drops guarded `PR_<n>_*` schemas through the domain CI service identity. It requests an account-scoped GitHub OIDC token and runs only framework-generated workspace SQL, not arbitrary PR business code with Snowflake credentials.
+`.github/workflows/pr-workspace.yml` creates/drops guarded `PR_<n>_*` schemas through the domain CI service identity.
+
+Security properties:
+
+- full immutable framework reference required;
+- account-scoped Snowflake OIDC audience;
+- project-specific `SU_GITHUB_<DOMAIN>_CI -> AR_<DOMAIN>_CI` identity;
+- executes framework-generated workspace SQL only;
+- does not run untrusted PR business code while holding Snowflake credentials.
+
+## Reusable stable deployment workflow
+
+`.github/workflows/project-deploy.yml` is the stable DEV/UAT/PROD delivery contract.
+
+It requires:
+
+```text
+full 40-character project Git SHA
+full 40-character framework Git SHA
+```
+
+The workflow verifies the project SHA belongs to `main` history, checks out the exact detached revision, verifies the project's dbt package pin matches the framework SHA, enters the selected protected GitHub Environment, requests an account-scoped OIDC token and runs dbt as:
+
+```text
+SU_GITHUB_<DOMAIN>_DEPLOY -> AR_<DOMAIN>_DEPLOY
+```
+
+Promotion changes environment, not source revision:
+
+```text
+same project SHA
+DEV -> UAT -> PROD
+```
 
 ## Approved load-strategy vocabulary
 
@@ -250,27 +237,33 @@ scd2_merge
 scd2_stream_task
 ```
 
+`esf_configure_dataset()` handles the basic dbt-native strategies. Dedicated SCD macros own SCD behavior; the basic materialization helper does not pretend SCD2 is generic incremental MERGE.
+
+## CI proof
+
+Framework CI validates Python utilities, metadata contracts, target resolution, pinned dbt installation, offline parsing, generated Snowflake-native SQL, SCD invariant/test discovery, deterministic SCD2 oracle rendering and reusable-workflow security contracts.
+
+This is source/static proof. Live Snowflake WIF, authorization, runtime execution, concurrency, performance and recovery still require real DEV infrastructure.
+
 ## Consumption model
 
 Projects consume immutable framework revisions and upgrade deliberately. They do not copy shared implementation and do not follow framework `main` implicitly.
 
-## Next framework growth
-
-```text
-checkpoint-aware watermark/lookback runner
-append-only event Stream + triggered Task templates
-reconciliation/freshness/audit primitives
-dedicated SCD2 snapshot/merge/stream-task implementations + invariants
-optional Dynamic Table equivalents for suitable SCD1/current projections
-DEV/UAT/PROD delivery contracts
-rollback/recovery/backfill templates
-```
-
-Do not add domain business logic here.
-
-Canonical architecture/status are maintained in:
+The current exact release SHA and verified cross-repository runs are recorded in:
 
 ```text
 enterprise-snowflake-platform-infra/docs/CURRENT_CONTEXT.md
-enterprise-snowflake-platform-infra/docs/PROJECT_BLUEPRINT.md
 ```
+
+## Next framework growth
+
+Do not add another abstraction merely because it is possible. Near-term growth should follow live DEV findings and real consumers, particularly:
+
+```text
+live runtime verification fixes
+rollback/recovery/backfill workflow templates
+operational evidence and promotion controls
+later ingestion adapter support after platform proof
+```
+
+Do not add domain business logic here.
