@@ -12,6 +12,29 @@ This framework treats SCD as a consumer of a declared capture contract. It never
 | full snapshot | current projection | transactional snapshot close + insert | snapshot-granularity history |
 | snapshot diff | MERGE derived I/U/D | consume derived diff or snapshot baseline | snapshot-granularity history |
 
+## Strategy and capture compatibility
+
+The metadata validator rejects structurally misleading combinations rather than letting a pipeline claim fidelity it cannot provide.
+
+- `scd2_snapshot` requires a full `snapshot` capture contract.
+- `scd2_stream_task` requires `full_change` or `full_event` fidelity and an append-preserved event capture archetype.
+- `scd2_merge` is the correctness-first batch baseline for ordered captured changes. Its history guarantee still depends on source fidelity: watermark/net-change inputs can only preserve changes that were actually captured.
+
+The implementation choice is downstream execution metadata; it does not redefine the source fidelity.
+
+## SCD target lifecycle
+
+`esf_scd2_target_table_sql()` initializes a regular SCD2 history table from the payload/source table shape using `CREATE TABLE ... LIKE`, then adds the framework history columns:
+
+```text
+_ESF_VALID_FROM
+_ESF_VALID_TO
+_ESF_IS_CURRENT
+_ESF_VERSION_ORDINAL
+```
+
+This DDL is a setup/deployment action and must not be placed inside the DML transaction that consumes a Stream or advances a checkpoint. Schema evolution remains explicit and governed; the helper does not silently drop or coerce existing payload columns.
+
 ## SCD1 classic baseline
 
 `esf_scd1_merge_sql()` first collapses the incoming window to exactly one deterministic row per business key using source ordering, then performs the current-state MERGE. Tombstones can delete current rows.
@@ -27,16 +50,7 @@ This is intentional: a direct MERGE with multiple source rows matching the same 
 3. insert new/current versions;
 4. commit atomically.
 
-Target history carries framework columns:
-
-```text
-_ESF_VALID_FROM
-_ESF_VALID_TO
-_ESF_IS_CURRENT
-_ESF_VERSION_ORDINAL
-```
-
-The target should be initialized from the same source payload shape plus these columns. Delete handling is end-dating by default rather than inventing a tombstone payload.
+Delete handling is end-dating by default rather than inventing a tombstone payload.
 
 ## SCD2 full-change baseline
 
@@ -82,7 +96,7 @@ COMMIT
 
 `esf_scd2_stream_task_sql()` generates this pattern. Stream consumption and history replacement happen in the same transaction. If the task fails before commit, the DML transaction rolls back and the stream offset is not successfully advanced.
 
-Each consumer must own its own stream. Do not share one stream between independent consumers.
+Each independent consumer must own its own stream. Do not share one stream between independent consumers.
 
 ## Optional Dynamic Table versions
 
@@ -97,18 +111,30 @@ The caller must explicitly choose the Dynamic Table refresh mode. `AUTO` is not 
 
 The equivalent classic implementation must always remain deployable. Window-heavy SCD2 definitions can be valid for incremental Dynamic Table refresh while still being expensive because changes can cause the affected business-key partitions to be recomputed. Benchmark the standalone SELECT and Dynamic Table refresh history before production adoption.
 
-## Required invariants
+## Executable invariants
 
-Every SCD2 implementation should test at least:
+The package exposes violation queries and dbt generic tests for the core structural invariants:
 
-- at most one current row per business key;
-- no overlapping validity ranges per business key;
-- valid-to is not earlier than valid-from;
-- deterministic ordering for equal timestamps;
+```text
+esf_scd2_multiple_current_violations_sql()
+esf_scd2_invalid_range_violations_sql()
+esf_scd2_overlap_violations_sql()
+esf_scd2_duplicate_version_violations_sql()
+esf_scd2_invariant_summary_sql()
+
+esf_scd2_one_current
+esf_scd2_valid_ranges
+esf_scd2_no_overlaps
+esf_scd2_unique_version_ordinal
+```
+
+Every SCD2 implementation should additionally test behavioral cases with deterministic fixtures:
+
 - duplicate replay is idempotent;
 - delete closes the active version;
 - reinsert after delete opens a new version;
 - late/out-of-order full-change event repairs history correctly;
+- equal timestamps are resolved by a deterministic source sequence/position;
 - checkpoint/stream advancement occurs only with successful target commit.
 
 ## What metadata does not contain
