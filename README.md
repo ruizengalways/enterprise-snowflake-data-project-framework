@@ -6,7 +6,7 @@ Versioned golden path for Snowflake data-project repositories.
 
 Implement reusable technical behaviour once so Health, Transport and future domains do not copy/paste or independently reimplement platform mechanics.
 
-Shared mechanics belong here when a bug fix would otherwise require coordinated edits across every project repo. Business joins, calculations and domain rules remain explicit project SQL/code.
+Shared mechanics belong here when a bug fix would otherwise require coordinated edits across every project repo. Business joins, calculations, source predicates and domain rules remain explicit project SQL/code.
 
 ## Current executable baseline
 
@@ -15,7 +15,8 @@ src/enterprise_snowflake_framework/
 ├── workspaces.py
 ├── query_tags.py
 ├── metadata_validation.py
-└── targets.py
+├── targets.py
+└── dbt_vars.py
 
 project_schema/
 ├── project.schema.json
@@ -27,11 +28,14 @@ scripts/
 ├── render_workspace_sql.py
 ├── render_query_tag.py
 ├── resolve_dbt_target.py
+├── render_dbt_vars.py
 └── assert_dbt_manifest.py
 
 dbt_package/
 ├── dbt_project.yml
-└── macros/environment/targets.sql
+└── macros/
+    ├── environment/targets.sql
+    └── loading/strategies.sql
 
 .github/actions/
 ├── validate-metadata/action.yml
@@ -49,7 +53,7 @@ personal DEV: <DEVELOPER>_<LAYER>
 PR CI:        PR_<NUMBER>_<LAYER>
 ```
 
-The renderer validates unquoted Snowflake identifiers and produces guarded create/drop SQL. PR schemas are transient with zero-day Time Travel and cleanup is prefix-guarded.
+The renderer validates identifiers and produces guarded create/drop SQL. PR schemas are transient with zero-day Time Travel and cleanup is prefix-guarded.
 
 Platform Infra owns stable permissions/roles/warehouses; this framework owns workspace naming/rendering mechanics.
 
@@ -66,38 +70,29 @@ The builder rejects unsupported keys, fails before Snowflake's 2000-character li
 
 ## Project metadata contracts
 
-Version 1 schemas cover:
+Version 1 schemas cover project identity, dataset technical behavior and project-owned RAW contracts.
+
+Dataset metadata includes:
 
 ```text
-project metadata
-  -> code/name/repository/owner team
-
-dataset technical metadata
-  -> RAW contract reference
-  -> load strategy
-  -> standard/custom implementation
-  -> business key / watermark
-  -> freshness / reconciliation
-
-RAW contract metadata
-  -> source/entity/grain/business key
-  -> columns/types/nullability/classification
-  -> source timestamp
-  -> snapshot/append/CDC semantics
-  -> cadence/retention/breaking-change policy
+raw_contract
+load_strategy
+implementation
+business_key
+watermark_column
+freshness
+reconciliation
 ```
 
-The validator combines JSON Schema validation with narrow technical checks for contract references, duplicate columns/dataset ids, CDC operation/sequence columns, keyed-strategy business keys, declared timestamp/key columns and freshness threshold ordering.
+RAW contracts include source/entity/grain/business key, columns/types/nullability/classification, source timestamp, snapshot/append/CDC semantics, cadence, retention and breaking-change policy.
 
-It intentionally does **not** encode business joins, formulas, arbitrary SQL or workflow branching in YAML.
+The validator adds bounded cross-file checks. It intentionally does **not** encode business joins, formulas, arbitrary SQL or workflow branching in YAML.
 
 Reusable validation action:
 
 ```text
 .github/actions/validate-metadata/action.yml
 ```
-
-A project checks out its own repo, then invokes the framework action pinned to a commit SHA.
 
 ## dbt physical target resolution
 
@@ -108,75 +103,89 @@ dbt-core      1.12.3
 dbt-snowflake 1.12.0
 ```
 
-`resolve_dbt_target.py` / `targets.py` derive environment-specific database, warehouse and schema-prefix values from technical inputs only.
-
-Examples:
+The target resolver derives physical database, warehouse and schema prefix from project/environment/workload inputs.
 
 ```text
-HEALTH + dev + transform + developer alice.smith
-  -> DEV_HEALTH
-  -> WH_HEALTH_TRANSFORM
-  -> schema prefix ALICE_SMITH
-
-HEALTH + ci + ci + PR 123
-  -> CI_HEALTH
-  -> WH_HEALTH_CI
-  -> schema prefix PR_123
-
-HEALTH + uat + transform
-  -> UAT_HEALTH
-  -> WH_HEALTH_TRANSFORM
-  -> stable layer schema names
+DEV personal -> DEV_<DOMAIN> / WH_<DOMAIN>_TRANSFORM / <DEVELOPER>_<LAYER>
+PR CI        -> CI_<DOMAIN>  / WH_<DOMAIN>_CI        / PR_<NUMBER>_<LAYER>
+UAT          -> UAT_<DOMAIN> / stable layer schemas
+PROD         -> PROD_<DOMAIN>/ stable layer schemas
 ```
 
-The resolver exports:
+Domain root projects keep explicit wrapper macros delegating database/schema naming to the framework dbt package. Model SQL should use `ref()` / `source()` and should not hard-code physical environment databases.
+
+Machine profiles use Snowflake `workload_identity` + OIDC + a short-lived token; no password/private key belongs in the project profile.
+
+See platform ADR-029.
+
+## Metadata-to-dbt bridge
+
+`render_dbt_vars.py` validates a project tree first and exposes only bounded technical metadata as:
 
 ```text
-ESF_PROJECT_CODE
-ESF_ENVIRONMENT
-ESF_SCHEMA_PREFIX
-DBT_DATABASE
-DBT_WAREHOUSE
-DBT_DEFAULT_SCHEMA
+esf_project
+esf_datasets
 ```
 
-The reusable dbt package consumes these values. Domain projects keep explicit root wrapper macros that delegate to:
+The reusable `dbt-static-check` action renders those vars and supplies them to offline `dbt parse`. Therefore metadata changes that affect dbt materialization are validated together with the project package/profile/macros.
+
+## Basic standard load strategies
+
+A standard model can identify its governed dataset:
+
+```jinja
+{{ enterprise_snowflake_framework.esf_configure_dataset('vehicle_position') }}
+```
+
+The model query remains explicit SQL. The framework reads `esf_datasets` metadata and currently maps:
 
 ```text
-enterprise_snowflake_framework.esf_generate_database_name
-enterprise_snowflake_framework.esf_generate_schema_name
+full_refresh
+  -> materialized=table
+
+append_only
+  -> materialized=incremental
+  -> incremental_strategy=append
+
+incremental_merge
+  -> materialized=incremental
+  -> incremental_strategy=merge
+  -> unique_key derived from dataset.business_key
 ```
 
-This keeps environment logic out of model SQL while avoiding implicit package override behaviour.
+Important boundary: `append_only` does **not** invent the dataset/source checkpoint predicate. The rows selected by the model during an incremental invocation are the rows appended. Source/watermark filtering remains explicit until a separately approved generic checkpoint primitive exists.
 
-Project profiles contain no passwords/private keys. CI WIF uses `authenticator: workload_identity`, `workload_identity_provider: OIDC`, and a short-lived `SNOWFLAKE_TOKEN` minted close to execution.
-
-Reusable offline validation action:
+The basic macro deliberately rejects:
 
 ```text
-.github/actions/dbt-static-check/action.yml
+implementation: custom
+scd2_snapshot
+scd2_merge
+scd2_stream_task
 ```
 
-It installs the pinned dbt versions, resolves a CI target, runs `dbt deps` and `dbt parse`, and does not connect to Snowflake.
+Custom implementations stay explicit project code. SCD2 strategies require dedicated framework implementations and invariant tests; they never silently degrade to a basic incremental model.
 
-## Framework CI proof
+See platform ADR-030.
 
-Framework CI currently validates:
+## CI proof
 
-- workspace/query-tag/metadata/target Python tests;
-- minimal metadata example;
-- workspace and QUERY_TAG renderers;
-- target resolver CLI;
+Framework CI currently proves:
+
+- workspace/query-tag/metadata/target/dbt-vars Python tests;
+- minimal metadata validation and dbt-vars rendering;
 - pinned dbt installation;
-- local framework dbt package installation;
-- offline `dbt parse`;
-- manifest assertion proving `CI_HEALTH.PR_123_STAGING` resolution.
+- target resolution through `dbt deps` + offline `dbt parse`;
+- manifest target `CI_HEALTH.PR_123_STAGING`;
+- `full_refresh -> table`;
+- `append_only -> incremental + append`;
+- `incremental_merge -> incremental + merge + metadata-derived unique_key`.
 
-This proves configuration/package/macro resolution, not live Snowflake authorization.
+This is configuration-level proof. Live Snowflake execution/idempotency/performance/recovery tests remain pending real DEV infrastructure.
 
 ## Reusable PR workspace workflow
 
-`.github/workflows/pr-workspace.yml` creates/drops guarded `PR_<n>_*` schemas through the domain CI service identity. It requests an account-scoped GitHub OIDC token and runs only framework-generated workspace SQL; it does not currently execute untrusted PR business code with Snowflake credentials.
+`.github/workflows/pr-workspace.yml` creates/drops guarded `PR_<n>_*` schemas through the domain CI service identity. It requests an account-scoped GitHub OIDC token and currently runs only framework-generated workspace SQL, not arbitrary PR business code with Snowflake credentials.
 
 ## Approved load-strategy vocabulary
 
@@ -191,19 +200,18 @@ scd2_stream_task
 
 Dynamic Tables are not an approved SCD2 mechanism.
 
-`implementation: custom` is a legitimate escape hatch for genuine differences; custom work still participates in contracts, testing, observability, reconciliation, audit and recovery.
-
 ## Consumption model
 
-Projects consume immutable framework revisions and upgrade deliberately. They do not copy shared implementation into each repo and do not follow framework `main` implicitly.
+Projects consume immutable framework revisions and upgrade deliberately. They do not copy shared implementation and do not follow framework `main` implicitly.
 
-Current project repos already consume the metadata validation action, dbt static action, dbt package and PR workspace workflow as thin pinned callers.
+Health and Transport currently use one aligned pinned framework revision across metadata validation, dbt package/static validation and PR workspace orchestration.
 
 ## Next framework growth
 
 ```text
-basic load-strategy primitives and tests
+query-tag integration with dbt invocation/model lifecycle
 reconciliation/freshness/audit primitives
+dedicated SCD2 snapshot/merge/stream-task implementations + invariants
 DEV deployment identity/workflow contract
 UAT/PROD promotion identity/workflow contract
 rollback/recovery/backfill templates
