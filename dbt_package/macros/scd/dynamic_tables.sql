@@ -5,7 +5,7 @@
     target_lag,
     key_columns,
     order_columns,
-    refresh_mode,
+    refresh_mode='ADAPTIVE',
     operation_column=none,
     delete_values=[],
     initialize='ON_SCHEDULE'
@@ -36,41 +36,6 @@ where {{ adapter.quote(operation_column) }} not in (
     warehouse,
     target_lag,
     select_sql,
-    refresh_mode,
-    initialize
-) }}
-{%- endmacro %}
-
-{% macro esf_scd2_dynamic_table_sql(
-    target_relation,
-    event_relation,
-    warehouse,
-    target_lag,
-    key_columns,
-    effective_at_column,
-    order_columns,
-    hash_column,
-    refresh_mode,
-    operation_column=none,
-    delete_values=[],
-    initialize='ON_SCHEDULE'
-) -%}
-    {%- set history_sql -%}
-{{ enterprise_snowflake_framework.esf_scd2_event_history_select(
-    event_relation,
-    key_columns,
-    effective_at_column,
-    order_columns,
-    hash_column,
-    operation_column,
-    delete_values
-) }}
-    {%- endset -%}
-{{ enterprise_snowflake_framework.esf_dynamic_table_projection_sql(
-    target_relation,
-    warehouse,
-    target_lag,
-    history_sql,
     refresh_mode,
     initialize
 ) }}
