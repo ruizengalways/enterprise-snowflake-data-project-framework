@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from .metadata_validation import MetadataValidationError, load_document, validate_project_tree
+from .query_tags import build_query_tag
 
 
-def build_dbt_vars(project_root: Path, schema_dir: Path) -> dict[str, Any]:
+def build_dbt_vars(
+    project_root: Path,
+    schema_dir: Path,
+    *,
+    query_context: Mapping[str, object] | None = None,
+) -> dict[str, Any]:
     """Build the bounded technical metadata exposed to dbt macros.
 
     Validation runs first so dbt never receives a partially valid metadata tree.
-    The output intentionally excludes arbitrary SQL/business-rule fields.
+    When execution context is supplied, each dataset receives a canonical
+    dataset-level Snowflake QUERY_TAG. Arbitrary SQL/business-rule fields are
+    never exposed through this bridge.
     """
     project_root = project_root.resolve()
     errors = validate_project_tree(project_root, schema_dir.resolve())
@@ -23,7 +32,7 @@ def build_dbt_vars(project_root: Path, schema_dir: Path) -> dict[str, Any]:
     for path in sorted((project_root / "config" / "datasets").glob("*.y*ml")):
         dataset = load_document(path)["dataset"]
         dataset_id = dataset["id"]
-        datasets[dataset_id] = {
+        technical = {
             key: value
             for key, value in dataset.items()
             if key
@@ -39,6 +48,24 @@ def build_dbt_vars(project_root: Path, schema_dir: Path) -> dict[str, Any]:
                 "reconciliation",
             }
         }
+
+        if query_context is not None:
+            raw_contract = load_document(project_root / dataset["raw_contract"])["contract"]
+            technical["query_tag"] = build_query_tag(
+                {
+                    "project": project["code"].lower(),
+                    "environment": query_context.get("environment"),
+                    "workload": query_context.get("workload"),
+                    "source": raw_contract.get("source_system"),
+                    "dataset": dataset_id,
+                    "run_id": query_context.get("run_id"),
+                    "git_sha": query_context.get("git_sha"),
+                    "pr_number": query_context.get("pr_number"),
+                    "operation": "dbt_model",
+                }
+            )
+
+        datasets[dataset_id] = technical
 
     return {
         "esf_project": {
