@@ -1,0 +1,135 @@
+name: Reusable Project Deploy
+
+on:
+  workflow_call:
+    inputs:
+      project_code:
+        description: Uppercase domain/project code, for example HEALTH.
+        required: true
+        type: string
+      environment:
+        description: Target Snowflake environment: dev, uat, or prod.
+        required: true
+        type: string
+      git_sha:
+        description: Immutable 40-character project Git commit SHA to deploy.
+        required: true
+        type: string
+      framework_ref:
+        description: Immutable 40-character framework Git commit SHA used by deployment tooling.
+        required: true
+        type: string
+      project_dir:
+        description: dbt project directory inside the calling repository.
+        required: false
+        default: dbt
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.project_code }} ${{ inputs.git_sha }} to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_OIDC_AUDIENCE: ${{ vars.SNOWFLAKE_OIDC_AUDIENCE }}
+      DBT_AUTHENTICATOR: workload_identity
+      DBT_DEFAULT_SCHEMA: STAGING
+      ESF_ENVIRONMENT: ${{ inputs.environment }}
+
+    steps:
+      - name: Validate immutable deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${{ inputs.project_code }}" =~ ^[A-Z][A-Z0-9_]{1,31}$ ]]; then
+            echo "Invalid project_code: ${{ inputs.project_code }}" >&2
+            exit 1
+          fi
+          if [[ ! "${{ inputs.environment }}" =~ ^(dev|uat|prod)$ ]]; then
+            echo "environment must be dev, uat, or prod" >&2
+            exit 1
+          fi
+          if [[ ! "${{ inputs.git_sha }}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "git_sha must be a full 40-character immutable Git commit SHA" >&2
+            exit 1
+          fi
+          if [[ ! "${{ inputs.framework_ref }}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "framework_ref must be a full 40-character immutable Git commit SHA" >&2
+            exit 1
+          fi
+          if [[ -z "${SNOWFLAKE_ACCOUNT:-}" || -z "${SNOWFLAKE_OIDC_AUDIENCE:-}" ]]; then
+            echo "GitHub Environment ${{ inputs.environment }} must define SNOWFLAKE_ACCOUNT and SNOWFLAKE_OIDC_AUDIENCE." >&2
+            exit 1
+          fi
+          if [[ "${SNOWFLAKE_OIDC_AUDIENCE}" == "snowflakecomputing.com" ]]; then
+            echo "Use an account-scoped Snowflake OIDC audience, not snowflakecomputing.com." >&2
+            exit 1
+          fi
+
+      - name: Checkout immutable project revision
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.git_sha }}
+          persist-credentials: false
+          path: project
+
+      - name: Checkout immutable framework revision
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: ruizengalways/enterprise-snowflake-data-project-framework
+          ref: ${{ inputs.framework_ref }}
+          persist-credentials: false
+          path: framework
+
+      - name: Setup Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: framework/requirements-dbt.txt
+
+      - name: Install pinned dbt toolchain
+        run: python -m pip install -r framework/requirements-dbt.txt
+
+      - name: Request account-scoped GitHub OIDC token
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(curl --fail --silent --show-error \
+            --get \
+            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            --data-urlencode "audience=${SNOWFLAKE_OIDC_AUDIENCE}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}")"
+          token="$(jq -er '.value' <<<"${response}")"
+          echo "::add-mask::${token}"
+          echo "SNOWFLAKE_TOKEN=${token}" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_USER=SU_GITHUB_${{ inputs.project_code }}_DEPLOY" >> "${GITHUB_ENV}"
+          echo "DBT_ROLE=AR_${{ inputs.project_code }}_DEPLOY" >> "${GITHUB_ENV}"
+          echo "DBT_DATABASE=$(printf '%s_%s' '${{ inputs.environment }}' '${{ inputs.project_code }}' | tr '[:lower:]' '[:upper:]')" >> "${GITHUB_ENV}"
+          echo "DBT_WAREHOUSE=WH_${{ inputs.project_code }}_TRANSFORM" >> "${GITHUB_ENV}"
+
+      - name: Resolve dbt dependencies
+        run: |
+          dbt deps \
+            --project-dir "project/${{ inputs.project_dir }}" \
+            --profiles-dir "project/${{ inputs.project_dir }}"
+
+      - name: Verify Snowflake deployment identity
+        run: |
+          dbt debug \
+            --target "${{ inputs.environment }}" \
+            --project-dir "project/${{ inputs.project_dir }}" \
+            --profiles-dir "project/${{ inputs.project_dir }}"
+
+      - name: Build project
+        run: |
+          dbt build \
+            --target "${{ inputs.environment }}" \
+            --project-dir "project/${{ inputs.project_dir }}" \
+            --profiles-dir "project/${{ inputs.project_dir }}"
