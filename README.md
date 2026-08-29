@@ -4,41 +4,30 @@ Versioned golden path for Snowflake data-project repositories.
 
 ## Purpose
 
-Provide reusable technical behaviour once so Health, Transport and future projects do not copy/paste or independently reimplement the same engineering mechanics.
+Implement reusable technical behaviour once so Health, Transport and future domains do not copy/paste or independently reimplement platform mechanics.
 
-## This repository owns
+Shared mechanics belong here when a bug fix would otherwise require coordinated edits across every project repo. Business joins/calculations/domain rules remain explicit project SQL/code.
 
-- versioned dbt package and reusable macros
-- generic tests
-- approved load-strategy implementations
-- SCD2 mechanics
-- reconciliation and freshness framework
-- audit and operational metadata contracts
-- project/dataset metadata schemas and validation
-- reusable GitHub Actions workflows
-- rollback, recovery and backfill workflow templates
-- project bootstrap/template capability
-- personal DEV / PR CI workspace lifecycle helpers
-- canonical Snowflake query-tag metadata helpers
+## Current executable baseline
 
-## This repository does not own
+```text
+src/enterprise_snowflake_framework/
+├── workspaces.py
+├── query_tags.py
+└── metadata_validation.py
 
-- Health or Transport business rules
-- project-specific RAW contracts
-- source-system simulation
-- central Snowflake account/RBAC/warehouse infrastructure
-- environment-specific project business configuration
-- employee identity lifecycle
+project_schema/
+├── project.schema.json
+├── dataset.schema.json
+└── raw_contract.schema.json
 
-## Design rule
-
-If fixing a shared technical behaviour would otherwise require manual edits in every data project, that behaviour probably belongs here.
-
-Use metadata for stable technical behaviour and explicit SQL/code for genuine domain logic. Support `implementation: custom` without exempting custom implementations from standard testing, observability, reconciliation, audit and recovery.
-
-## First executable slice
-
-The framework now contains dependency-free Python utilities for two cross-project concerns.
+validation/validate_metadata.py
+scripts/render_workspace_sql.py
+scripts/render_query_tag.py
+tests/
+examples/minimal-project/
+.github/workflows/framework-ci.yml
+```
 
 ### Workspace lifecycle
 
@@ -47,40 +36,104 @@ personal DEV: <DEVELOPER>_<LAYER>
 PR CI:        PR_<NUMBER>_<LAYER>
 ```
 
-`scripts/render_workspace_sql.py` validates identifiers and renders guarded create/drop SQL. PR schemas are transient with zero-day Time Travel and must be explicitly cleaned up by the PR lifecycle.
+The renderer validates unquoted Snowflake identifiers and produces guarded create/drop SQL. PR schemas are transient with zero-day Time Travel and cleanup is prefix-guarded.
 
-Platform Infra owns the corresponding stable Snowflake permissions and machine roles; this framework owns naming/rendering behaviour.
+Platform Infra owns stable permissions/roles/warehouses; this framework owns workspace naming/rendering mechanics.
 
 ### Query tags
 
-`scripts/render_query_tag.py` creates compact deterministic JSON `QUERY_TAG` metadata using the common fields:
+Canonical compact JSON `QUERY_TAG` fields:
 
 ```text
-project
-environment
-workload
-source
-pipeline
-dataset
-run_id
-git_sha
-pr_number
-operation
+required: project, environment, workload
+optional: source, pipeline, dataset, run_id, git_sha, pr_number, operation
 ```
 
-Required fields are `project`, `environment`, and `workload`. Personal/sensitive data does not belong in query tags.
+The builder rejects unsupported keys, fails before Snowflake's 2000-character limit, and can render `ALTER SESSION SET QUERY_TAG` SQL. Do not put personal, secret, regulated or business-payload data in query tags.
 
-See [`docs/patterns/workspaces-and-query-tags.md`](docs/patterns/workspaces-and-query-tags.md).
+### Project metadata contracts
 
-## Validation
+Version 1 JSON Schemas now exist for:
 
-`.github/workflows/framework-ci.yml` runs the standard-library unit tests and smoke-tests both renderers on every push/PR. There are no third-party runtime dependencies in this first slice.
+```text
+project metadata
+  -> code/name/repository/owner team
+
+dataset technical metadata
+  -> RAW contract reference
+  -> load strategy
+  -> standard/custom implementation
+  -> business key / watermark
+  -> freshness / reconciliation
+
+RAW contract metadata
+  -> source/entity/grain/business key
+  -> columns/types/nullability/classification
+  -> source timestamp
+  -> snapshot/append/CDC semantics
+  -> cadence/retention/breaking-change policy
+```
+
+The validator combines JSON Schema validation with deliberately narrow technical checks such as contract references, duplicate columns, CDC operation/sequence columns, keyed-strategy business keys and freshness threshold ordering.
+
+It intentionally does **not** encode business joins, formulas, arbitrary SQL or workflow branching in YAML.
+
+Run against a project tree:
+
+```bash
+python -m pip install -e .
+python validation/validate_metadata.py --project-root examples/minimal-project
+```
+
+See ADR-028 in `enterprise-snowflake-platform-infra`.
+
+## Approved load-strategy vocabulary
+
+```text
+full_refresh
+append_only
+incremental_merge
+scd2_snapshot
+scd2_merge
+scd2_stream_task
+```
+
+Dynamic Tables are not an approved SCD2 mechanism.
+
+`implementation: custom` is a legitimate escape hatch for genuine differences; custom work still participates in contracts, testing, observability, reconciliation, audit and recovery.
+
+## CI
+
+`.github/workflows/framework-ci.yml` currently:
+
+- installs the framework and validation dependencies;
+- runs workspace/query-tag/metadata unit tests;
+- validates the checked-in minimal project example;
+- smoke-tests PR workspace SQL rendering;
+- smoke-tests QUERY_TAG SQL rendering.
+
+The current metadata implementation depends only on `PyYAML` and `jsonschema` in addition to Python's standard library.
+
+## Future growth
+
+Next layers should add:
+
+```text
+dbt environment/database/schema resolution
+reusable PR workspace workflow
+approved load/SCD2 macros
+reconciliation/freshness/audit primitives
+DEV -> PR CI -> UAT -> PROD reusable delivery workflows
+rollback/recovery/backfill templates
+```
+
+Do not add domain business logic here.
 
 ## Consumption model
 
-Projects consume released framework versions as dependencies and upgrade deliberately; they do not permanently copy the framework into each repository.
+Projects consume released/pinned framework versions and upgrade deliberately; they do not permanently copy shared implementation into each repo.
 
-The canonical platform architecture and handoff context are maintained in:
+Canonical architecture/status are maintained in:
 
 ```text
 enterprise-snowflake-platform-infra/docs/CURRENT_CONTEXT.md
