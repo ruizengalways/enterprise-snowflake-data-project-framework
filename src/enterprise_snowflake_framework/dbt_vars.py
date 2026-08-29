@@ -32,6 +32,7 @@ def build_dbt_vars(
     for path in sorted((project_root / "config" / "datasets").glob("*.y*ml")):
         dataset = load_document(path)["dataset"]
         dataset_id = dataset["id"]
+        raw_contract = load_document(project_root / dataset["raw_contract"])["contract"]
         technical = {
             key: value
             for key, value in dataset.items()
@@ -48,9 +49,11 @@ def build_dbt_vars(
                 "reconciliation",
             }
         }
+        technical["source_system"] = raw_contract["source_system"]
+        if raw_contract.get("capture"):
+            technical["capture"] = raw_contract["capture"]
 
         if query_context is not None:
-            raw_contract = load_document(project_root / dataset["raw_contract"])["contract"]
             technical["query_tag"] = build_query_tag(
                 {
                     "project": project["code"].lower(),
