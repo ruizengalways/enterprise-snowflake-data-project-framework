@@ -30,7 +30,7 @@
         -- interval is valid and preserves both real source changes.
         ('C', '2026-03-01 00:00:00 +00:00', 10, 'c1', 'I', 'charlie-v1'),
         ('C', '2026-03-01 00:00:00 +00:00', 20, 'c2', 'U', 'charlie-v2')
-) as fixture
+)
     {%- endset -%}
 
     {%- set actual_history_sql -%}
