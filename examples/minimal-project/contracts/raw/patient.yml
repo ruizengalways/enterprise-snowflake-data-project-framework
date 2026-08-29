@@ -32,6 +32,15 @@ contract:
     operation_column: source_operation
     sequence_column: source_sequence
     delete_semantics: tombstone
+  capture:
+    archetype: full_change
+    fidelity: full_change
+    checkpoint_kind: source_position
+    ordering_columns:
+      - source_sequence
+    idempotency_columns:
+      - patient_id
+      - source_sequence
   cadence: continuous-or-micro-batch
   retention_days: 30
   breaking_change_policy: versioned_contract
