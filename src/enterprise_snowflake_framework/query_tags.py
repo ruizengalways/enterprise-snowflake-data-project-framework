@@ -52,3 +52,10 @@ def build_query_tag(metadata: Mapping[str, object]) -> str:
             f"query tag is {len(result)} characters; Snowflake QUERY_TAG limit is {MAX_QUERY_TAG_LENGTH}"
         )
     return result
+
+
+def render_set_query_tag_sql(metadata: Mapping[str, object]) -> str:
+    """Render a single guarded ALTER SESSION statement for QUERY_TAG."""
+    tag = build_query_tag(metadata)
+    escaped = tag.replace("'", "''")
+    return f"ALTER SESSION SET QUERY_TAG = '{escaped}';"
