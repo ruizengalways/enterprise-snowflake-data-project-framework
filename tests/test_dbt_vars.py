@@ -16,7 +16,7 @@ class DbtVarsTests(unittest.TestCase):
 
         self.assertEqual(values["esf_project"]["code"], "HEALTH")
         patient = values["esf_datasets"]["patient"]
-        self.assertEqual(patient["load_strategy"], "scd2_snapshot")
+        self.assertEqual(patient["load_strategy"], "scd2_merge")
         self.assertEqual(patient["business_key"], ["patient_id"])
         self.assertEqual(patient["source_system"], "ehr_mssql")
         self.assertEqual(patient["capture"]["archetype"], "full_change")
