@@ -1,0 +1,54 @@
+name: Framework CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python utilities
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Run unit tests
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests -v
+
+      - name: Smoke-test PR workspace SQL
+        env:
+          PYTHONPATH: src
+        run: |
+          python scripts/render_workspace_sql.py \
+            --kind pr \
+            --action create \
+            --database CI_HEALTH \
+            --pr-number 123 \
+            --layers staging marts
+
+      - name: Smoke-test query tag
+        env:
+          PYTHONPATH: src
+        run: |
+          python scripts/render_query_tag.py \
+            --project health \
+            --environment ci \
+            --workload pr_ci \
+            --dataset patient \
+            --pr-number 123 \
+            --run-id "${GITHUB_RUN_ID}" \
+            --git-sha "${GITHUB_SHA}"
