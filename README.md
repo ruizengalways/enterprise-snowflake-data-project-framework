@@ -24,7 +24,6 @@ project_schema/
 ├── dataset.schema.json
 └── raw_contract.schema.json
 
-validation/validate_metadata.py
 scripts/
 ├── render_workspace_sql.py
 ├── render_query_tag.py
@@ -33,14 +32,14 @@ scripts/
 ├── render_dbt_context.py
 └── assert_dbt_manifest.py
 
-dbt_package/
-├── dbt_project.yml
-└── macros/
-    ├── environment/targets.sql
-    └── loading/strategies.sql
+dbt_package/macros/
+├── environment/targets.sql
+├── loading/strategies.sql
+└── capture/
+    ├── primitives.sql
+    └── dynamic_tables.sql
 
-docs/patterns/
-└── capture-archetypes.md
+docs/patterns/capture-archetypes.md
 
 .github/actions/
 ├── validate-metadata/action.yml
@@ -51,31 +50,25 @@ docs/patterns/
 └── pr-workspace.yml
 ```
 
-## Workspace lifecycle
+## Workspace + execution context
 
 ```text
 personal DEV: <DEVELOPER>_<LAYER>
 PR CI:        PR_<NUMBER>_<LAYER>
 ```
 
-The renderer validates identifiers and produces guarded create/drop SQL. PR schemas are transient with zero-day Time Travel and cleanup is prefix-guarded.
+The target/context renderer derives database, warehouse, schema prefix and canonical run-level QUERY_TAG. Project model SQL uses `ref()` / `source()` rather than hard-coded DEV/UAT/PROD names.
 
-Platform Infra owns stable permissions/roles/warehouses; this framework owns workspace naming/rendering mechanics.
-
-## Query tags
-
-Canonical compact JSON `QUERY_TAG` fields:
+Current stable reference:
 
 ```text
-required: project, environment, workload
-optional: source, pipeline, dataset, run_id, git_sha, pr_number, operation
+dbt-core      1.12.3
+dbt-snowflake 1.12.0
 ```
 
-The builder rejects unsupported keys, fails before Snowflake's 2000-character limit, and can render `ALTER SESSION SET QUERY_TAG` SQL. Do not put personal, secret, regulated or business-payload data in query tags.
+Machine profiles use Snowflake workload identity + OIDC + short-lived tokens. No passwords/private keys belong in project profiles.
 
-`render_dbt_context.py` now combines physical target resolution, run-level QUERY_TAG context and bounded dataset vars so dbt execution can use one canonical technical context.
-
-## Project metadata contracts
+## Project and RAW capture contracts
 
 Version 1 schemas cover project identity, dataset technical behavior and project-owned RAW contracts.
 
@@ -91,9 +84,7 @@ freshness
 reconciliation
 ```
 
-RAW contracts include source/entity/grain/business key, columns/types/nullability/classification, source timestamp, change semantics, cadence, retention and breaking-change policy.
-
-RAW contracts can now optionally classify source capture with a bounded technical block:
+RAW contracts can classify source capture with a bounded block:
 
 ```yaml
 capture:
@@ -115,7 +106,7 @@ snapshot_diff
 cursor_or_file
 ```
 
-Supported fidelity levels:
+Supported fidelity:
 
 ```text
 current_state
@@ -124,98 +115,86 @@ full_change
 full_event
 ```
 
-The validator rejects impossible/overstated combinations, undeclared ordering/idempotency columns, invalid lookback usage and snapshot-diff delete semantics that are not explicitly marked as inferred.
+Validator rules deliberately prevent overstating source fidelity. It validates archetype/fidelity/checkpoint compatibility, lookback usage, declared ordering/idempotency columns, non-null business keys and snapshot-diff delete semantics.
 
-This metadata is intentionally small. It does **not** contain MERGE SQL, task graphs, arbitrary predicates or orchestration branching.
+Metadata remains bounded technical metadata. It does **not** contain MERGE SQL, task graphs, arbitrary predicates or workflow branching.
 
 See `docs/patterns/capture-archetypes.md` and platform ADR-031.
 
 ## Classic Snowflake first; Dynamic Tables optional
 
-Every reusable data-engineering pattern must have a non-Dynamic-Table production implementation using Snowflake-native objects such as:
+Every reusable pattern has a non-Dynamic-Table path using native Snowflake objects:
 
 ```text
 TABLE
 STREAM / CHANGES where useful
 TASK / triggered TASK / task graph
 MERGE / INSERT / DELETE
-Snowflake Scripting where transactional multi-step control is required
-Time Travel / CLONE for recovery
+Snowflake Scripting
+Time Travel / CLONE
 ```
 
-Dynamic Tables are optional alternate execution engines for declarative projections when supported and performance-proven. They must never be the only implementation.
+Dynamic Tables are optional alternate engines for declarative projections after performance/operability proof. They are never the only implementation and are not the canonical SCD2 mechanism.
 
-The authoritative Bronze design retains replayable evidence when history/delete inference/recovery matters. In particular:
+Authoritative RAW is replayable evidence when history, delete inference or recovery matters:
 
-- full snapshots are retained as append snapshot batches when snapshot diff or SCD2 is needed;
-- full CDC/events are appended to normal tables before any current-state merge;
-- Snowflake Streams are consumers/offsets, not the authoritative full source history;
-- Dynamic Tables do not replace source cursor/watermark/file checkpoint state.
+- full snapshots are retained as append snapshot batches before latest/diff projections;
+- full CDC/events are appended to normal tables before current-state merges;
+- Snowflake Streams are consumers/offsets, not full source-history storage;
+- source cursor/watermark/file progress remains explicit runtime state.
 
-SCD2 remains classic-only in the framework baseline; Dynamic Tables are not the canonical SCD2 mechanism.
+## Executable capture SQL primitives
 
-## dbt physical target resolution
-
-Current stable reference versions:
+The dbt package now provides reusable classic primitives:
 
 ```text
-dbt-core      1.12.3
-dbt-snowflake 1.12.0
+esf_latest_observation
+  -> deterministic latest row per business/idempotency key
+  -> useful for watermark lookback, net CDC and SCD1 current projection
+
+esf_snapshot_diff
+  -> compares snapshot N vs N-1
+  -> emits INSERT / UPDATE / DELETE using business key + record hash
+
+esf_merge_current_state_sql
+  -> Snowflake MERGE
+  -> optional tombstone/delete branch
+  -> UPDATE ALL BY NAME / INSERT ALL BY NAME for same-shape Bronze current projections
 ```
 
-The target resolver derives physical database, warehouse and schema prefix from project/environment/workload inputs.
+The project still owns the actual SELECT/source predicate and domain semantics.
+
+Optional declarative projection wrapper:
 
 ```text
-DEV personal -> DEV_<DOMAIN> / WH_<DOMAIN>_TRANSFORM / <DEVELOPER>_<LAYER>
-PR CI        -> CI_<DOMAIN>  / WH_<DOMAIN>_CI        / PR_<NUMBER>_<LAYER>
-UAT          -> UAT_<DOMAIN> / stable layer schemas
-PROD         -> PROD_<DOMAIN>/ stable layer schemas
+esf_dynamic_table_projection_sql
 ```
 
-Domain root projects keep explicit wrapper macros delegating database/schema naming to the framework dbt package. Model SQL should use `ref()` / `source()` and should not hard-code physical environment databases.
-
-Machine profiles use Snowflake `workload_identity` + OIDC + a short-lived token; no password/private key belongs in the project profile.
-
-See platform ADR-029.
-
-## Metadata-to-dbt bridge
-
-`render_dbt_vars.py` validates a project tree first and exposes only bounded technical metadata as:
+It requires an explicit production refresh mode:
 
 ```text
-esf_project
-esf_datasets
+INCREMENTAL | FULL | ADAPTIVE
 ```
 
-Dataset vars now include source system and validated capture semantics where declared. This allows future SCD/checkpoint/reconciliation macros to enforce source fidelity rather than guessing it.
-
-The reusable `dbt-static-check` action renders those vars and supplies them to offline `dbt parse`. Therefore metadata changes that affect dbt materialization are validated together with the project package/profile/macros.
+`AUTO` is intentionally not a framework production default. `CUSTOM_INCREMENTAL` is a separate DML contract and is not silently substituted for the classic implementation.
 
 ## Basic standard load strategies
 
-A standard model can identify its governed dataset:
+A standard model identifies its governed dataset:
 
 ```jinja
 {{ enterprise_snowflake_framework.esf_configure_dataset('vehicle_position') }}
 ```
 
-The model query remains explicit SQL. The framework reads `esf_datasets` metadata and currently maps:
+The framework currently maps:
 
 ```text
-full_refresh
-  -> materialized=table
-
-append_only
-  -> materialized=incremental
-  -> incremental_strategy=append
-
-incremental_merge
-  -> materialized=incremental
-  -> incremental_strategy=merge
-  -> unique_key derived from dataset.business_key
+full_refresh      -> table
+append_only       -> incremental + append
+incremental_merge -> incremental + merge + metadata business key
 ```
 
-Important boundary: `append_only` does **not** invent the dataset/source checkpoint predicate. The rows selected by the model during an incremental invocation are the rows appended. Source/watermark filtering remains explicit until the generic checkpoint primitive is implemented.
+`append_only` does not invent a source/checkpoint predicate. The selected rows are the rows appended.
 
 The basic macro deliberately rejects:
 
@@ -226,19 +205,39 @@ scd2_merge
 scd2_stream_task
 ```
 
-Custom implementations stay explicit project code. SCD2 strategies require dedicated framework implementations and invariant tests; they never silently degrade to a basic incremental model.
+Dedicated SCD2 implementations and invariant tests remain separate work.
 
-See platform ADR-030.
+## Runtime checkpoint boundary
+
+Mutable capture progress does not live in Git metadata. The platform repository now owns the first real `PLATFORM_CONTROL.OPERATIONS` consumer:
+
+```text
+PIPELINE_CHECKPOINT
+ADVANCE_PIPELINE_CHECKPOINT(...)
+```
+
+The same runtime contract can hold watermark, cursor, LSN/source position, event offset, snapshot ID or file identity. Advance it only after successful target processing; when atomicity is required, target DML and checkpoint advancement belong in the same explicit transaction/Snowflake Scripting unit.
+
+## Query tags
+
+Canonical compact JSON `QUERY_TAG` fields:
+
+```text
+required: project, environment, workload
+optional: source, pipeline, dataset, run_id, git_sha, pr_number, operation
+```
+
+The dbt context carries a run-level tag and dataset vars can carry model-level tags. Do not put personal, secret, regulated or business-payload data in query tags.
 
 ## CI proof
 
-Framework CI proves workspace/query-tag/metadata/target/dbt-vars utilities, minimal metadata validation, pinned dbt installation, target resolution through offline `dbt parse`, and basic load materialization configuration.
+Framework CI validates Python metadata/context utilities, pinned dbt installation, offline parse/compile, physical target resolution, basic load config and generated capture SQL. Capture smoke models cover tombstone MERGE, latest-observation dedupe, snapshot diff, and the explicit-mode Dynamic Table wrapper.
 
-Capture-archetype schema/semantic validation is now included in the Python metadata test suite. Live Snowflake execution/idempotency/performance/recovery tests remain pending real DEV infrastructure.
+This is source/compile proof. Live Snowflake execution, concurrency, performance and recovery behavior still require real DEV infrastructure.
 
 ## Reusable PR workspace workflow
 
-`.github/workflows/pr-workspace.yml` creates/drops guarded `PR_<n>_*` schemas through the domain CI service identity. It requests an account-scoped GitHub OIDC token and currently runs only framework-generated workspace SQL, not arbitrary PR business code with Snowflake credentials.
+`.github/workflows/pr-workspace.yml` creates/drops guarded `PR_<n>_*` schemas through the domain CI service identity. It requests an account-scoped GitHub OIDC token and runs only framework-generated workspace SQL, not arbitrary PR business code with Snowflake credentials.
 
 ## Approved load-strategy vocabulary
 
@@ -251,25 +250,19 @@ scd2_merge
 scd2_stream_task
 ```
 
-Dynamic Tables are not an approved SCD2 mechanism.
-
 ## Consumption model
 
 Projects consume immutable framework revisions and upgrade deliberately. They do not copy shared implementation and do not follow framework `main` implicitly.
 
-Health and Transport use aligned pinned framework revisions across metadata validation, dbt package/static validation and PR workspace orchestration. Pins are upgraded only after framework CI passes.
-
 ## Next framework growth
 
 ```text
-classic Bronze capture primitives
-checkpoint/watermark runtime state + idempotent advancement
-snapshot diff primitive
+checkpoint-aware watermark/lookback runner
+append-only event Stream + triggered Task templates
 reconciliation/freshness/audit primitives
 dedicated SCD2 snapshot/merge/stream-task implementations + invariants
 optional Dynamic Table equivalents for suitable SCD1/current projections
-DEV deployment identity/workflow contract
-UAT/PROD promotion identity/workflow contract
+DEV/UAT/PROD delivery contracts
 rollback/recovery/backfill templates
 ```
 
