@@ -8,6 +8,23 @@ model-paths:
 macro-paths:
   - macros
 
+vars:
+  esf_datasets:
+    smoke_full_refresh:
+      id: smoke_full_refresh
+      load_strategy: full_refresh
+      implementation: standard
+    smoke_append_only:
+      id: smoke_append_only
+      load_strategy: append_only
+      implementation: standard
+    smoke_incremental_merge:
+      id: smoke_incremental_merge
+      load_strategy: incremental_merge
+      implementation: standard
+      business_key:
+        - id
+
 models:
   esf_dbt_smoke:
     staging:
