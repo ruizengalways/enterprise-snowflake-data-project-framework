@@ -7,6 +7,10 @@ name = "enterprise-snowflake-data-project-framework"
 version = "0.1.0"
 description = "Reusable technical utilities for Enterprise Snowflake data projects"
 requires-python = ">=3.11"
+dependencies = [
+  "jsonschema>=4.23,<5",
+  "PyYAML>=6.0,<7",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
