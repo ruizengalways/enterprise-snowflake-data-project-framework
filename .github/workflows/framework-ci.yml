@@ -149,6 +149,15 @@ jobs:
             --schema PR_123_STAGING \
             --pre-hook-contains "when matched and source"
 
+      - name: Assert optional Dynamic Table projection hook
+        run: |
+          python scripts/assert_dbt_manifest.py \
+            --manifest examples/dbt-smoke/target/manifest.json \
+            --model smoke_capture_dynamic_table \
+            --database CI_HEALTH \
+            --schema PR_123_STAGING \
+            --pre-hook-contains "refresh_mode = INCREMENTAL"
+
       - name: Compile classic capture queries without Snowflake connection
         run: |
           dbt compile --no-partial-parse \
