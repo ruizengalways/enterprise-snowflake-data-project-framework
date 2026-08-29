@@ -67,7 +67,7 @@ jobs:
             --pr-number 123
 
   dbt-smoke:
-    name: dbt 1.12 target, loads and capture SQL
+    name: dbt 1.12 target, loads, capture, quality and SCD SQL
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -202,3 +202,45 @@ jobs:
           grep -qi "checkpoint_kind = 'source_position'" "$FILE"
           grep -qi "call PLATFORM_CONTROL.OPERATIONS.ADVANCE_PIPELINE_CHECKPOINT" "$FILE"
           grep -qi "object_construct('source_sequence', 12345)" "$FILE"
+
+      - name: Assert freshness and reconciliation SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "datediff('minute'" "$FILE"
+          grep -qi "when age_minutes > 120 then 'FAIL'" "$FILE"
+          grep -qi "count(distinct" "$FILE"
+          grep -qi "min_source_timestamp" "$FILE"
+          grep -qi "max_source_timestamp" "$FILE"
+
+      - name: Assert pipeline run ledger SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "merge into PLATFORM_CONTROL.OPERATIONS.PIPELINE_RUN" "$FILE"
+          grep -qi "'RUNNING' as status" "$FILE"
+          grep -qi "status = 'SUCCEEDED'" "$FILE"
+          grep -qi "rows_deleted = 5" "$FILE"
+
+      - name: Assert deterministic SCD1 SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "merge into CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT" "$FILE"
+          grep -qi 'partition by.*"patient_id"' "$FILE" || grep -qi '"patient_id"' "$FILE"
+          grep -qi "when matched and source.\"op\" in" "$FILE"
+
+      - name: Assert full-change SCD2 SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "_esf_version_ordinal" "$FILE"
+          grep -qi "lead(\"source_updated_at\")" "$FILE"
+          grep -qi "delete from CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY" "$FILE"
+          grep -qi "insert into CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY" "$FILE"
+          grep -qi "begin transaction" "$FILE"
+          grep -qi "commit" "$FILE"
+
+      - name: Assert snapshot SCD2 SQL
+        run: |
+          FILE="${RUNNER_TEMP}/capture-render.txt"
+          grep -qi "update CI_HEALTH.PR_123_CANONICAL.PATIENT_SNAPSHOT_HISTORY" "$FILE"
+          grep -qi "_esf_is_current = false" "$FILE"
+          grep -qi "not exists" "$FILE"
+          grep -qi "_esf_valid_from" "$FILE"
