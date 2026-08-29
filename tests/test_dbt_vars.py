@@ -18,6 +18,12 @@ class DbtVarsTests(unittest.TestCase):
         patient = values["esf_datasets"]["patient"]
         self.assertEqual(patient["load_strategy"], "scd2_snapshot")
         self.assertEqual(patient["business_key"], ["patient_id"])
+        self.assertEqual(patient["source_system"], "ehr_mssql")
+        self.assertEqual(patient["capture"]["archetype"], "full_change")
+        self.assertEqual(patient["capture"]["fidelity"], "full_change")
+        self.assertEqual(patient["capture"]["checkpoint_kind"], "source_position")
+        self.assertEqual(patient["capture"]["ordering_columns"], ["source_sequence"])
+        self.assertEqual(patient["capture"]["idempotency_columns"], ["patient_id", "source_sequence"])
         self.assertNotIn("columns", patient)
         self.assertNotIn("query_tag", patient)
 
