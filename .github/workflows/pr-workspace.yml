@@ -1,0 +1,143 @@
+name: Reusable PR Workspace
+
+on:
+  workflow_call:
+    inputs:
+      project_code:
+        description: Uppercase domain/project code, for example HEALTH.
+        required: true
+        type: string
+      pr_number:
+        description: Pull request number used in PR_<NUMBER>_<LAYER> schemas.
+        required: true
+        type: number
+      action:
+        description: Workspace lifecycle action: create or drop.
+        required: true
+        type: string
+      framework_ref:
+        description: Pinned framework commit/tag used to render workspace/query-tag SQL.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  workspace:
+    name: ${{ inputs.action }} ${{ inputs.project_code }} PR ${{ inputs.pr_number }} workspace
+    runs-on: ubuntu-latest
+    environment: ci
+
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_OIDC_AUDIENCE: ${{ vars.SNOWFLAKE_OIDC_AUDIENCE }}
+      SNOWFLAKE_AUTHENTICATOR: WORKLOAD_IDENTITY
+      SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+      SNOWFLAKE_ENHANCED_EXIT_CODES: "1"
+
+    steps:
+      - name: Validate workflow inputs and environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${{ inputs.project_code }}" =~ ^[A-Z][A-Z0-9_]{1,31}$ ]]; then
+            echo "Invalid project_code: ${{ inputs.project_code }}" >&2
+            exit 1
+          fi
+          if [[ "${{ inputs.action }}" != "create" && "${{ inputs.action }}" != "drop" ]]; then
+            echo "action must be create or drop" >&2
+            exit 1
+          fi
+          if [[ -z "${SNOWFLAKE_ACCOUNT:-}" || -z "${SNOWFLAKE_OIDC_AUDIENCE:-}" ]]; then
+            echo "GitHub Environment ci must define SNOWFLAKE_ACCOUNT and SNOWFLAKE_OIDC_AUDIENCE." >&2
+            exit 1
+          fi
+          if [[ "${SNOWFLAKE_OIDC_AUDIENCE}" == "snowflakecomputing.com" ]]; then
+            echo "Use an account-scoped Snowflake OIDC audience, not snowflakecomputing.com." >&2
+            exit 1
+          fi
+
+      - name: Checkout calling project
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          path: project
+
+      - name: Checkout pinned framework
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: ruizengalways/enterprise-snowflake-data-project-framework
+          ref: ${{ inputs.framework_ref }}
+          persist-credentials: false
+          path: framework
+
+      - name: Setup Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: framework/pyproject.toml
+
+      - name: Install pinned framework
+        run: python -m pip install ./framework
+
+      - name: Render workspace and query-tag SQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          project_code="${{ inputs.project_code }}"
+          project_lower="$(printf '%s' "${project_code}" | tr '[:upper:]' '[:lower:]')"
+          database="CI_${project_code}"
+
+          python framework/scripts/render_query_tag.py \
+            --project "${project_lower}" \
+            --environment ci \
+            --workload pr_ci \
+            --pr-number "${{ inputs.pr_number }}" \
+            --run-id "${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" \
+            --git-sha "${GITHUB_SHA}" \
+            --operation "workspace_${{ inputs.action }}" \
+            --as-sql \
+            > "${RUNNER_TEMP}/query_tag.sql"
+
+          python framework/scripts/render_workspace_sql.py \
+            --kind pr \
+            --action "${{ inputs.action }}" \
+            --database "${database}" \
+            --pr-number "${{ inputs.pr_number }}" \
+            > "${RUNNER_TEMP}/workspace.sql"
+
+          cat "${RUNNER_TEMP}/query_tag.sql" "${RUNNER_TEMP}/workspace.sql" \
+            > "${RUNNER_TEMP}/pr_workspace.sql"
+
+      - name: Install Snowflake CLI
+        uses: snowflakedb/snowflake-actions@1160898243c351349621a6c2bac2e455ab1077b2
+        with:
+          use-oidc: false
+          cli-version: "3.25.0"
+
+      - name: Request account-scoped GitHub OIDC token
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(curl --fail --silent --show-error \
+            --get \
+            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            --data-urlencode "audience=${SNOWFLAKE_OIDC_AUDIENCE}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}")"
+          token="$(jq -er '.value' <<<"${response}")"
+          echo "::add-mask::${token}"
+          echo "SNOWFLAKE_TOKEN=${token}" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_AUDIENCE=${SNOWFLAKE_OIDC_AUDIENCE}" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_USER=SU_GITHUB_${{ inputs.project_code }}_CI" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_ROLE=AR_${{ inputs.project_code }}_CI" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_WAREHOUSE=WH_${{ inputs.project_code }}_CI" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_DATABASE=CI_${{ inputs.project_code }}" >> "${GITHUB_ENV}"
+
+      - name: Test Snowflake WIF connection
+        run: snow connection test -x
+
+      - name: Apply PR workspace lifecycle SQL
+        run: snow sql -x --local-only --enhanced-exit-codes -f "${RUNNER_TEMP}/pr_workspace.sql"
