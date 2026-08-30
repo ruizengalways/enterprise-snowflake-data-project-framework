@@ -76,6 +76,21 @@ def validate_scd2_metadata(
             f"{', '.join(missing_capture_order)}"
         )
 
+    # The history macro partitions by business key. Any remaining columns that
+    # make a captured event idempotently identifiable must therefore participate
+    # in the within-key ordering, otherwise two distinct events can tie.
+    non_key_idempotency_columns = [
+        name for name in capture.get("idempotency_columns", []) if name not in contract_keys
+    ]
+    missing_idempotency_order = [
+        name for name in non_key_idempotency_columns if name not in order_columns
+    ]
+    if missing_idempotency_order:
+        errors.append(
+            f"{path}: dataset.scd2.order_columns must include non-key raw idempotency columns "
+            f"for deterministic within-key ordering: {', '.join(missing_idempotency_order)}"
+        )
+
     if delete_values and not operation_column:
         errors.append(f"{path}: dataset.scd2.delete_values requires dataset.scd2.operation_column")
     if operation_column and not delete_values:
