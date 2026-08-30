@@ -24,6 +24,24 @@ vars:
       implementation: standard
       business_key:
         - id
+    smoke_scd2:
+      id: smoke_scd2
+      load_strategy: scd2_merge
+      implementation: standard
+      business_key:
+        - id
+      scd2:
+        effective_at_column: effective_at
+        order_columns:
+          - effective_at
+          - source_sequence
+        tracked_columns:
+          - status
+          - depot_id
+        operation_column: source_operation
+        delete_values:
+          - D
+        late_arriving_policy: rebuild_affected_keys
 
 models:
   esf_dbt_smoke:
