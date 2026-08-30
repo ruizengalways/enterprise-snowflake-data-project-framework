@@ -48,6 +48,30 @@ class Scd2MetadataContractTests(unittest.TestCase):
     def test_valid_contract_has_no_errors(self) -> None:
         self.assertEqual(validate_scd2_metadata(self.dataset, self.contract, self.path), [])
 
+    def test_snapshot_contract_only_needs_tracked_attributes(self) -> None:
+        self.dataset["load_strategy"] = "scd2_snapshot"
+        self.dataset["scd2"] = {"tracked_columns": ["status", "depot_id"]}
+        self.contract["change_semantics"] = {
+            "mode": "snapshot",
+            "delete_semantics": "inferred_snapshot_diff",
+        }
+        self.contract["capture"] = {
+            "archetype": "snapshot",
+            "fidelity": "current_state",
+            "checkpoint_kind": "snapshot_id",
+        }
+
+        self.assertEqual(validate_scd2_metadata(self.dataset, self.contract, self.path), [])
+
+    def test_snapshot_rejects_event_history_only_metadata(self) -> None:
+        self.dataset["load_strategy"] = "scd2_snapshot"
+        self.dataset["scd2"] = {
+            "tracked_columns": ["status"],
+            "effective_at_column": "source_updated_at",
+        }
+        errors = validate_scd2_metadata(self.dataset, self.contract, self.path)
+        self.assertTrue(any("event-history-only fields" in error for error in errors))
+
     def test_effective_timestamp_must_participate_in_ordering(self) -> None:
         self.dataset["scd2"]["order_columns"] = ["source_sequence"]
         errors = validate_scd2_metadata(self.dataset, self.contract, self.path)
