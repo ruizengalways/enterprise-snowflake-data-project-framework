@@ -51,12 +51,7 @@
         "scd2": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "effective_at_column",
-            "order_columns",
-            "tracked_columns",
-            "late_arriving_policy"
-          ],
+          "required": ["tracked_columns"],
           "properties": {
             "effective_at_column": {
               "type": "string",
@@ -130,6 +125,28 @@
           },
           "then": {
             "required": ["scd2"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "load_strategy": {
+                "enum": ["scd2_merge", "scd2_stream_task"]
+              }
+            },
+            "required": ["load_strategy"]
+          },
+          "then": {
+            "properties": {
+              "scd2": {
+                "required": [
+                  "effective_at_column",
+                  "order_columns",
+                  "tracked_columns",
+                  "late_arriving_policy"
+                ]
+              }
+            }
           }
         }
       ]
