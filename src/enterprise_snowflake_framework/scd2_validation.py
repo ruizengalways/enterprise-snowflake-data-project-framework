@@ -44,6 +44,7 @@ def validate_scd2_metadata(
     dataset_keys = dataset.get("business_key", [])
     contract_keys = contract["business_key"]
     tracked_columns = scd2["tracked_columns"]
+    change_semantics = contract["change_semantics"]
 
     if dataset_keys != contract_keys:
         errors.append(
@@ -71,6 +72,14 @@ def validate_scd2_metadata(
             errors.append(
                 f"{path}: scd2_snapshot must not declare event-history-only fields: "
                 f"{', '.join(event_only)}"
+            )
+        if change_semantics.get("mode") != "snapshot":
+            errors.append(
+                f"{path}: scd2_snapshot requires raw change_semantics.mode=snapshot"
+            )
+        if change_semantics.get("delete_semantics") != "inferred_snapshot_diff":
+            errors.append(
+                f"{path}: scd2_snapshot requires raw change_semantics.delete_semantics=inferred_snapshot_diff"
             )
         return errors
 
@@ -127,7 +136,6 @@ def validate_scd2_metadata(
     if operation_column and not delete_values:
         errors.append(f"{path}: dataset.scd2.operation_column requires dataset.scd2.delete_values")
 
-    change_semantics = contract["change_semantics"]
     raw_operation_column = change_semantics.get("operation_column")
     delete_semantics = change_semantics.get("delete_semantics", "none")
     if delete_semantics == "tombstone":
