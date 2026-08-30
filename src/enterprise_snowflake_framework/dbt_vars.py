@@ -45,6 +45,7 @@ def build_dbt_vars(
                 "implementation",
                 "business_key",
                 "watermark_column",
+                "scd2",
                 "freshness",
                 "reconciliation",
             }
