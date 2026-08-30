@@ -24,7 +24,11 @@ project:
     )
 
     scd2_block = ""
-    if load_strategy.startswith("scd2_"):
+    if load_strategy == "scd2_snapshot":
+        scd2_block = """  scd2:
+    tracked_columns: [entity_value]
+"""
+    elif load_strategy in {"scd2_merge", "scd2_stream_task"}:
         scd2_block = """  scd2:
     effective_at_column: source_updated_at
     order_columns: [source_updated_at, source_sequence]
