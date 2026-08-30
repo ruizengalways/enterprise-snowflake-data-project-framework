@@ -30,6 +30,20 @@ vars:
       implementation: standard
       business_key:
         - id
+      capture:
+        archetype: full_change
+        fidelity: full_change
+        checkpoint_kind: source_position
+        ordering_columns:
+          - source_sequence
+        idempotency_columns:
+          - id
+          - source_sequence
+        bootstrap:
+          mode: snapshot_then_incremental
+          snapshot_consistency: at_handoff_position
+          incremental_start: exclusive
+          reconciliation_required: true
       scd2:
         effective_at_column: effective_at
         order_columns:
