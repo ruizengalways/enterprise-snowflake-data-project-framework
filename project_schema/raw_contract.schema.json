@@ -129,6 +129,24 @@
               "minItems": 1,
               "uniqueItems": true,
               "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+            },
+            "bootstrap": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "snapshot_consistency",
+                "incremental_start",
+                "reconciliation_required"
+              ],
+              "properties": {
+                "mode": {"const": "snapshot_then_incremental"},
+                "snapshot_consistency": {"const": "at_handoff_position"},
+                "incremental_start": {
+                  "enum": ["exclusive", "inclusive_with_deduplication"]
+                },
+                "reconciliation_required": {"const": true}
+              }
             }
           }
         },
