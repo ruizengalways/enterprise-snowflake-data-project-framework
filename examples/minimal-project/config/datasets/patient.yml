@@ -8,6 +8,18 @@ dataset:
   business_key:
     - patient_id
   watermark_column: source_updated_at
+  scd2:
+    effective_at_column: source_updated_at
+    order_columns:
+      - source_updated_at
+      - source_sequence
+    tracked_columns:
+      - patient_status
+      - primary_facility_id
+    operation_column: source_operation
+    delete_values:
+      - D
+    late_arriving_policy: rebuild_affected_keys
   freshness:
     warn_after_minutes: 60
     error_after_minutes: 120
