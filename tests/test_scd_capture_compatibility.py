@@ -22,6 +22,18 @@ project:
 """,
         encoding="utf-8",
     )
+
+    scd2_block = ""
+    if load_strategy.startswith("scd2_"):
+        scd2_block = """  scd2:
+    effective_at_column: source_updated_at
+    order_columns: [source_updated_at, source_sequence]
+    tracked_columns: [entity_value]
+    operation_column: source_operation
+    delete_values: [D]
+    late_arriving_policy: rebuild_affected_keys
+"""
+
     (root / "config" / "datasets" / "entity.yml").write_text(
         f"""schema_version: 1
 dataset:
@@ -31,7 +43,7 @@ dataset:
   load_strategy: {load_strategy}
   implementation: standard
   business_key: [entity_id]
-""",
+{scd2_block}""",
         encoding="utf-8",
     )
     (root / "contracts" / "raw" / "entity.yml").write_text(
@@ -46,6 +58,9 @@ contract:
     - name: entity_id
       type: VARCHAR
       nullable: false
+    - name: entity_value
+      type: VARCHAR
+      nullable: true
     - name: source_updated_at
       type: TIMESTAMP_NTZ
       nullable: false
