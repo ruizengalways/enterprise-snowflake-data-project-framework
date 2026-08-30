@@ -148,6 +148,10 @@ jobs:
             --project-dir examples/dbt-smoke \
             --profiles-dir examples/dbt-smoke \
             | tee "${RUNNER_TEMP}/scd2-behavior-render.txt"
+          dbt run-operation smoke_metadata_scd2_sql \
+            --project-dir examples/dbt-smoke \
+            --profiles-dir examples/dbt-smoke \
+            | tee "${RUNNER_TEMP}/scd2-metadata-render.txt"
 
       - name: Assert Snowflake-native capture and orchestration
         shell: bash
@@ -215,6 +219,21 @@ jobs:
             echo "Stream SCD2 must use repeatable Stream reads, not a shared affected-key work table." >&2
             exit 1
           fi
+
+      - name: Assert metadata-driven SCD2 strategy split
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="${RUNNER_TEMP}/scd2-metadata-render.txt"
+          grep -qi -- "---EVENT_SCD2---" "$FILE"
+          grep -qi -- "---SNAPSHOT_SCD2---" "$FILE"
+          grep -qi "from RAW_EVENT_ROWS as source_rows" "$FILE"
+          grep -qi "from RAW_SNAPSHOT_ROWS as source_rows" "$FILE"
+          grep -qi "hash(" "$FILE"
+          grep -qi "lead(\"effective_at\")" "$FILE"
+          grep -qi "update SNAPSHOT_HISTORY as target" "$FILE"
+          grep -qi "insert into SNAPSHOT_HISTORY" "$FILE"
+          grep -qi "'2026-01-01 00:00:00'::timestamp_ntz" "$FILE"
 
       - name: Assert deterministic SCD2 behavior oracle
         shell: bash
