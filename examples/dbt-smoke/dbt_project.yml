@@ -42,6 +42,16 @@ vars:
         delete_values:
           - D
         late_arriving_policy: rebuild_affected_keys
+    smoke_scd2_snapshot:
+      id: smoke_scd2_snapshot
+      load_strategy: scd2_snapshot
+      implementation: standard
+      business_key:
+        - id
+      scd2:
+        tracked_columns:
+          - status
+          - depot_id
 
 models:
   esf_dbt_smoke:
