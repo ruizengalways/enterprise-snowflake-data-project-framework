@@ -49,6 +49,7 @@ select
     incremental_start,
     snapshot_id,
     snapshot_batch_id,
+    reconciliation_passed,
     reconciliation_details,
     git_sha,
     boundary_captured_at,
@@ -71,6 +72,9 @@ order by boundary_captured_at desc
     handoff_position_expression,
     git_sha
 ) -%}
+    {%- if handoff_position_expression is not string or handoff_position_expression | trim == '' -%}
+        {{ exceptions.raise_compiler_error('handoff_position_expression must be a non-empty SQL expression') }}
+    {%- endif -%}
     {%- set metadata = enterprise_snowflake_framework.esf_bootstrap_metadata(dataset_id) -%}
     {%- set capture = metadata.get('capture') -%}
     {%- set bootstrap = metadata.get('bootstrap') -%}
@@ -108,13 +112,21 @@ call {{ enterprise_snowflake_framework.esf_domain_bootstrap_procedure(
     project_code,
     dataset_id,
     bootstrap_id,
+    reconciliation_passed_expression,
     reconciliation_details_expression
 ) -%}
+    {%- if reconciliation_passed_expression is not string or reconciliation_passed_expression | trim == '' -%}
+        {{ exceptions.raise_compiler_error('reconciliation_passed_expression must be a non-empty SQL boolean expression') }}
+    {%- endif -%}
+    {%- if reconciliation_details_expression is not string or reconciliation_details_expression | trim == '' -%}
+        {{ exceptions.raise_compiler_error('reconciliation_details_expression must be a non-empty SQL expression') }}
+    {%- endif -%}
 call {{ enterprise_snowflake_framework.esf_domain_bootstrap_procedure(
     project_code, 'PIPELINE_BOOTSTRAP_MARK_VALIDATED'
 ) }}(
     {{ enterprise_snowflake_framework.esf_sql_literal(dataset_id | lower) }},
     {{ enterprise_snowflake_framework.esf_sql_literal(bootstrap_id) }},
+    {{ reconciliation_passed_expression }},
     {{ reconciliation_details_expression }}
 )
 {%- endmacro %}
