@@ -1,0 +1,94 @@
+name: Bootstrap Contract CI
+
+on:
+  pull_request:
+    paths:
+      - "project_schema/raw_contract.schema.json"
+      - "src/enterprise_snowflake_framework/bootstrap_validation.py"
+      - "src/enterprise_snowflake_framework/metadata_validation.py"
+      - "src/enterprise_snowflake_framework/dbt_vars.py"
+      - "dbt_package/macros/capture/bootstrap.sql"
+      - "examples/minimal-project/**"
+      - "examples/dbt-smoke/**"
+      - "tests/test_bootstrap_handoff_contract.py"
+      - "tests/test_dbt_vars.py"
+      - ".github/workflows/bootstrap-contract-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "project_schema/raw_contract.schema.json"
+      - "src/enterprise_snowflake_framework/bootstrap_validation.py"
+      - "src/enterprise_snowflake_framework/metadata_validation.py"
+      - "src/enterprise_snowflake_framework/dbt_vars.py"
+      - "dbt_package/macros/capture/bootstrap.sql"
+      - "examples/minimal-project/**"
+      - "examples/dbt-smoke/**"
+      - "tests/test_bootstrap_handoff_contract.py"
+      - "tests/test_dbt_vars.py"
+      - ".github/workflows/bootstrap-contract-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap-contract:
+    name: Validate bootstrap handoff contract
+    runs-on: ubuntu-latest
+    env:
+      DBT_DATABASE: CI_HEALTH
+      DBT_WAREHOUSE: WH_HEALTH_CI
+      DBT_DEFAULT_SCHEMA: PR_123_STAGING
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dbt.txt
+
+      - name: Install framework and dbt
+        run: |
+          python -m pip install -e .
+          python -m pip install -r requirements-dbt.txt
+
+      - name: Validate machine contract
+        run: |
+          python -m unittest tests.test_bootstrap_handoff_contract tests.test_dbt_vars -v
+          python validation/validate_metadata.py --project-root examples/minimal-project
+
+      - name: Render domain bootstrap API offline
+        run: |
+          dbt deps --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
+          dbt parse --no-partial-parse \
+            --project-dir examples/dbt-smoke --profiles-dir examples/dbt-smoke
+          dbt run-operation smoke_bootstrap_handoff_sql \
+            --project-dir examples/dbt-smoke \
+            --profiles-dir examples/dbt-smoke \
+            | tee "${RUNNER_TEMP}/bootstrap-render.txt"
+
+      - name: Assert domain-scoped bootstrap contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="${RUNNER_TEMP}/bootstrap-render.txt"
+          grep -q "PLATFORM_CONTROL.OPERATIONS.HEALTH_PIPELINE_BOOTSTRAP" "$FILE"
+          grep -q "HEALTH_PIPELINE_BOOTSTRAP_START" "$FILE"
+          grep -q "HEALTH_PIPELINE_BOOTSTRAP_MARK_SNAPSHOT_LANDED" "$FILE"
+          grep -q "HEALTH_PIPELINE_BOOTSTRAP_MARK_VALIDATED" "$FILE"
+          grep -q "HEALTH_PIPELINE_BOOTSTRAP_COMMIT_HANDOFF" "$FILE"
+          grep -q "'source_position'" "$FILE"
+          grep -q "'exclusive'" "$FILE"
+          if grep -q "P_PROJECT_CODE\|P_ENVIRONMENT" "$FILE"; then
+            echo "Project/environment must not be caller-controlled bootstrap arguments." >&2
+            exit 1
+          fi
+          if grep -Eqi "(insert|update|merge|delete)[[:space:]].*PLATFORM_CONTROL.OPERATIONS.PIPELINE_(BOOTSTRAP|CHECKPOINT)" "$FILE"; then
+            echo "Framework project API must not render direct shared-control DML." >&2
+            exit 1
+          fi

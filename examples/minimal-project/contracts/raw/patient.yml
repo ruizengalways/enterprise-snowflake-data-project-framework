@@ -49,6 +49,11 @@ contract:
     idempotency_columns:
       - patient_id
       - source_sequence
+    bootstrap:
+      mode: snapshot_then_incremental
+      snapshot_consistency: at_handoff_position
+      incremental_start: exclusive
+      reconciliation_required: true
   cadence: continuous-or-micro-batch
   retention_days: 30
   breaking_change_policy: versioned_contract

@@ -24,6 +24,15 @@ class DbtVarsTests(unittest.TestCase):
         self.assertEqual(patient["capture"]["checkpoint_kind"], "source_position")
         self.assertEqual(patient["capture"]["ordering_columns"], ["source_sequence"])
         self.assertEqual(patient["capture"]["idempotency_columns"], ["patient_id", "source_sequence"])
+        self.assertEqual(
+            patient["capture"]["bootstrap"],
+            {
+                "mode": "snapshot_then_incremental",
+                "snapshot_consistency": "at_handoff_position",
+                "incremental_start": "exclusive",
+                "reconciliation_required": True,
+            },
+        )
         self.assertEqual(patient["scd2"]["effective_at_column"], "source_updated_at")
         self.assertEqual(patient["scd2"]["order_columns"], ["source_updated_at", "source_sequence"])
         self.assertEqual(patient["scd2"]["tracked_columns"], ["patient_status", "primary_facility_id"])
