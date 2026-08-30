@@ -48,6 +48,42 @@
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
         },
+        "scd2": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tracked_columns"],
+          "properties": {
+            "effective_at_column": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "order_columns": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+            },
+            "tracked_columns": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+            },
+            "operation_column": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "delete_values": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "maxLength": 64}
+            },
+            "late_arriving_policy": {
+              "enum": ["rebuild_affected_keys"]
+            }
+          }
+        },
         "freshness": {
           "type": "object",
           "additionalProperties": false,
@@ -76,7 +112,44 @@
             }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "load_strategy": {
+                "enum": ["scd2_snapshot", "scd2_merge", "scd2_stream_task"]
+              }
+            },
+            "required": ["load_strategy"]
+          },
+          "then": {
+            "required": ["scd2"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "load_strategy": {
+                "enum": ["scd2_merge", "scd2_stream_task"]
+              }
+            },
+            "required": ["load_strategy"]
+          },
+          "then": {
+            "properties": {
+              "scd2": {
+                "required": [
+                  "effective_at_column",
+                  "order_columns",
+                  "tracked_columns",
+                  "late_arriving_policy"
+                ]
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

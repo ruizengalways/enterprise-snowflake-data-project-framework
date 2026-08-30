@@ -7,6 +7,8 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
+from .scd2_validation import validate_scd2_metadata
+
 SCHEMA_FILES = {
     "project": "project.schema.json",
     "dataset": "dataset.schema.json",
@@ -20,6 +22,10 @@ _KEYED_STRATEGIES = {
 }
 _SCD2_STRATEGIES = {
     "scd2_snapshot",
+    "scd2_merge",
+    "scd2_stream_task",
+}
+_EVENT_SCD2_STRATEGIES = {
     "scd2_merge",
     "scd2_stream_task",
 }
@@ -176,14 +182,14 @@ def validate_strategy_capture_compatibility(
             f"{path}: load_strategy scd2_snapshot requires capture.archetype=snapshot; got {archetype}"
         )
 
-    if strategy == "scd2_stream_task":
+    if strategy in _EVENT_SCD2_STRATEGIES:
         if fidelity not in {"full_change", "full_event"}:
             errors.append(
-                f"{path}: load_strategy scd2_stream_task requires capture fidelity full_change/full_event; got {fidelity}"
+                f"{path}: load_strategy {strategy} requires capture fidelity full_change/full_event; got {fidelity}"
             )
         if archetype not in {"full_change", "cursor_or_file"}:
             errors.append(
-                f"{path}: load_strategy scd2_stream_task requires an append-preserved event capture archetype; got {archetype}"
+                f"{path}: load_strategy {strategy} requires an append-preserved event capture archetype; got {archetype}"
             )
 
     return errors
@@ -225,6 +231,13 @@ def validate_dataset(
         if not raw_errors:
             errors.extend(
                 validate_strategy_capture_compatibility(
+                    dataset,
+                    contract_document["contract"],
+                    path,
+                )
+            )
+            errors.extend(
+                validate_scd2_metadata(
                     dataset,
                     contract_document["contract"],
                     path,
