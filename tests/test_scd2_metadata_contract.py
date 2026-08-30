@@ -15,6 +15,7 @@ class Scd2MetadataContractTests(unittest.TestCase):
                 {"name": "depot_id"},
                 {"name": "source_updated_at"},
                 {"name": "source_sequence"},
+                {"name": "source_event_id"},
                 {"name": "source_operation"},
             ],
             "change_semantics": {
@@ -56,6 +57,15 @@ class Scd2MetadataContractTests(unittest.TestCase):
         self.dataset["scd2"]["order_columns"] = ["source_updated_at"]
         errors = validate_scd2_metadata(self.dataset, self.contract, self.path)
         self.assertTrue(any("raw capture ordering columns" in error for error in errors))
+
+    def test_non_key_idempotency_columns_must_participate_in_ordering(self) -> None:
+        self.contract["capture"]["idempotency_columns"] = [
+            "vehicle_id",
+            "source_sequence",
+            "source_event_id",
+        ]
+        errors = validate_scd2_metadata(self.dataset, self.contract, self.path)
+        self.assertTrue(any("non-key raw idempotency columns" in error for error in errors))
 
     def test_business_key_must_match_raw_contract(self) -> None:
         self.dataset["business_key"] = ["other_id"]
