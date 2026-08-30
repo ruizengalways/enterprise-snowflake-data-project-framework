@@ -28,7 +28,7 @@ scd2:
     - depot_id
 ```
 
-Snapshot effective time belongs to the snapshot execution itself. The metadata-aware snapshot API therefore accepts an explicit effective-time SQL expression when the snapshot is applied.
+Snapshot effective time belongs to the snapshot execution itself. The metadata-aware snapshot API therefore accepts an explicit effective-time SQL expression when the snapshot is applied. The RAW contract must use snapshot capture semantics and `delete_semantics: inferred_snapshot_diff`, because a missing row in a later snapshot is how the standard snapshot SCD2 path closes the current version.
 
 For an append-preserved event feed, a standard event-history SCD2 dataset declares:
 
@@ -52,6 +52,8 @@ scd2:
 
 The RAW contract remains the source-facing contract. It declares which columns exist, source change semantics, capture fidelity, checkpoint type, source ordering, and idempotency columns. Dataset metadata declares how the analytical history should behave.
 
+Standard `scd2_merge` and `scd2_stream_task` intentionally require an append-preserved `full_change` or `full_event` capture. Current-state and net-change feeds are not accepted by the standard event-history path because they cannot safely support deterministic late-arrival rebuilds. If a source cannot provide that fidelity, use the snapshot strategy or a project-specific implementation rather than pretending the source has recoverable event history.
+
 ## Why the event-history fields are explicit
 
 `business_key` identifies one logical entity. For standard SCD2 it must exactly match the RAW contract business key.
@@ -64,7 +66,7 @@ The RAW contract remains the source-facing contract. It declares which columns e
 
 `operation_column` and `delete_values` describe explicit tombstone events when an event-oriented RAW contract exposes them. Snapshot SCD2 does not declare these fields; disappearance is handled by snapshot comparison.
 
-`late_arriving_policy: rebuild_affected_keys` means a late event does not patch only the current row. The history for affected business keys is reconstructed from the append-preserved event relation so interval boundaries remain deterministic.
+`late_arriving_policy: rebuild_affected_keys` means a late event does not patch only the current row. The history for affected business keys is reconstructed from the append-preserved event relation so interval boundaries remain deterministic. The relation supplied to that rebuild must retain the complete event history needed for the affected keys. Static metadata can verify capture fidelity, but a DEV/runtime test must verify that the actual retained data satisfies this rebuild horizon.
 
 ## dbt API
 
@@ -107,6 +109,8 @@ Static validation can prove that:
 
 - required SCD2 metadata exists for SCD2 strategies;
 - snapshot metadata is not polluted with event-history-only fields;
+- snapshot SCD2 uses snapshot source semantics and inferred snapshot deletion;
+- standard event-history SCD2 uses append-preserved full-change/full-event capture;
 - referenced tracked columns exist in the RAW contract;
 - analytical and RAW business keys agree;
 - event effective timestamp participates in ordering;
@@ -118,7 +122,7 @@ Static validation can prove that:
 
 A separate pure-Python test oracle reads machine fixtures under `tests/fixtures/scd2/` and checks event-history semantics independently of dbt SQL generation. The fixture covers unchanged replay, attribute updates, late arrival, delete boundaries, and reinsert after delete. This gives us a useful semantic proof before a Snowflake account exists without duplicating production pipeline code into the runtime package.
 
-This still does not prove Snowflake runtime behavior. Live DEV verification is required for transaction behavior, permissions, task/stream semantics, query plans, concurrency, retry behavior, and cross-domain authorization.
+This still does not prove Snowflake runtime behavior. Live DEV verification is required for transaction behavior, permissions, retained rebuild history, task/stream semantics, query plans, concurrency, retry behavior, and cross-domain authorization.
 
 ## Readability rule
 
