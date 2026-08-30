@@ -41,7 +41,7 @@ The RAW contract remains the source-facing contract. It declares which columns e
 
 `effective_at_column` is the business-effective timestamp used for interval boundaries.
 
-`order_columns` defines deterministic event order. It must contain the effective timestamp and preserve any ordering columns required by the RAW capture contract.
+`order_columns` defines deterministic event order. It must contain the effective timestamp, preserve ordering required by RAW capture, and include the non-business-key portion of RAW idempotency columns. Because history is partitioned by business key, this prevents two distinct source events for the same entity from becoming an unresolved ordering tie.
 
 `tracked_columns` are the business attributes whose change creates a new version. Business keys are deliberately excluded. The framework computes a Snowflake `HASH(...)` over these columns for change detection; the hash is an internal comparison aid, not a unique identifier or cryptographic value.
 
@@ -82,6 +82,7 @@ Static validation can prove that:
 - analytical and RAW business keys agree;
 - effective timestamp participates in ordering;
 - source-required ordering is preserved;
+- non-key source idempotency columns participate in within-key ordering;
 - tracked columns are attributes rather than keys;
 - tombstone configuration is consistent with RAW change semantics;
 - dbt can parse the metadata-aware SCD2 macro path offline.
