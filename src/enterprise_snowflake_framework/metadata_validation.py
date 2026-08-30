@@ -7,6 +7,8 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
+from .scd2_validation import validate_scd2_metadata
+
 SCHEMA_FILES = {
     "project": "project.schema.json",
     "dataset": "dataset.schema.json",
@@ -225,6 +227,13 @@ def validate_dataset(
         if not raw_errors:
             errors.extend(
                 validate_strategy_capture_compatibility(
+                    dataset,
+                    contract_document["contract"],
+                    path,
+                )
+            )
+            errors.extend(
+                validate_scd2_metadata(
                     dataset,
                     contract_document["contract"],
                     path,
