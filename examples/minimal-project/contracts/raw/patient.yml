@@ -11,6 +11,14 @@ contract:
       type: VARCHAR
       nullable: false
       classification: confidential
+    - name: patient_status
+      type: VARCHAR
+      nullable: true
+      classification: confidential
+    - name: primary_facility_id
+      type: VARCHAR
+      nullable: true
+      classification: internal
     - name: source_updated_at
       type: TIMESTAMP_NTZ
       nullable: false
