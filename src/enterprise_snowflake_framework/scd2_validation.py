@@ -8,6 +8,17 @@ SCD2_STRATEGIES = {
     "scd2_merge",
     "scd2_stream_task",
 }
+EVENT_SCD2_STRATEGIES = {
+    "scd2_merge",
+    "scd2_stream_task",
+}
+_EVENT_ONLY_FIELDS = {
+    "effective_at_column",
+    "order_columns",
+    "operation_column",
+    "delete_values",
+    "late_arriving_policy",
+}
 
 
 def validate_scd2_metadata(
@@ -32,6 +43,7 @@ def validate_scd2_metadata(
     declared_columns = {column["name"] for column in contract["columns"]}
     dataset_keys = dataset.get("business_key", [])
     contract_keys = contract["business_key"]
+    tracked_columns = scd2["tracked_columns"]
 
     if dataset_keys != contract_keys:
         errors.append(
@@ -39,24 +51,11 @@ def validate_scd2_metadata(
             f"dataset={dataset_keys}, contract={contract_keys}"
         )
 
-    effective_at = scd2["effective_at_column"]
-    order_columns = scd2["order_columns"]
-    tracked_columns = scd2["tracked_columns"]
-    operation_column = scd2.get("operation_column")
-    delete_values = scd2.get("delete_values", [])
-
-    referenced = [effective_at, *order_columns, *tracked_columns]
-    if operation_column:
-        referenced.append(operation_column)
-    undeclared = sorted({name for name in referenced if name not in declared_columns})
-    if undeclared:
+    undeclared_tracked = sorted({name for name in tracked_columns if name not in declared_columns})
+    if undeclared_tracked:
         errors.append(
-            f"{path}: dataset.scd2 references columns not declared by raw contract: {', '.join(undeclared)}"
-        )
-
-    if effective_at not in order_columns:
-        errors.append(
-            f"{path}: dataset.scd2.effective_at_column must be included in dataset.scd2.order_columns"
+            f"{path}: dataset.scd2 references columns not declared by raw contract: "
+            f"{', '.join(undeclared_tracked)}"
         )
 
     tracked_keys = [name for name in tracked_columns if name in contract_keys]
@@ -64,6 +63,38 @@ def validate_scd2_metadata(
         errors.append(
             f"{path}: dataset.scd2.tracked_columns must describe attributes, not business keys: "
             f"{', '.join(tracked_keys)}"
+        )
+
+    if strategy == "scd2_snapshot":
+        event_only = sorted(field for field in _EVENT_ONLY_FIELDS if field in scd2)
+        if event_only:
+            errors.append(
+                f"{path}: scd2_snapshot must not declare event-history-only fields: "
+                f"{', '.join(event_only)}"
+            )
+        return errors
+
+    if strategy not in EVENT_SCD2_STRATEGIES:
+        return errors
+
+    effective_at = scd2["effective_at_column"]
+    order_columns = scd2["order_columns"]
+    operation_column = scd2.get("operation_column")
+    delete_values = scd2.get("delete_values", [])
+
+    referenced_event_columns = [effective_at, *order_columns]
+    if operation_column:
+        referenced_event_columns.append(operation_column)
+    undeclared_event = sorted({name for name in referenced_event_columns if name not in declared_columns})
+    if undeclared_event:
+        errors.append(
+            f"{path}: dataset.scd2 references columns not declared by raw contract: "
+            f"{', '.join(undeclared_event)}"
+        )
+
+    if effective_at not in order_columns:
+        errors.append(
+            f"{path}: dataset.scd2.effective_at_column must be included in dataset.scd2.order_columns"
         )
 
     capture = contract.get("capture") or {}
