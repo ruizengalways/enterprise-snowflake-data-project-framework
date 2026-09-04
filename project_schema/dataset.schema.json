@@ -30,6 +30,7 @@
             "full_refresh",
             "append_only",
             "incremental_merge",
+            "scd1_merge",
             "scd2_snapshot",
             "scd2_merge",
             "scd2_stream_task"
@@ -114,6 +115,17 @@
         }
       },
       "allOf": [
+        {
+          "if": {
+            "properties": {
+              "load_strategy": {"const": "scd1_merge"}
+            },
+            "required": ["load_strategy"]
+          },
+          "then": {
+            "required": ["business_key"]
+          }
+        },
         {
           "if": {
             "properties": {
