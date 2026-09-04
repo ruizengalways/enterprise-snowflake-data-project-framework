@@ -25,10 +25,10 @@
         {%- do config(materialized='table') -%}
     {%- elif strategy == 'append_only' -%}
         {%- do config(materialized='incremental', incremental_strategy='append') -%}
-    {%- elif strategy == 'incremental_merge' -%}
+    {%- elif strategy in ['incremental_merge', 'scd1_merge'] -%}
         {%- set keys = dataset.get('business_key', []) -%}
         {%- if not keys -%}
-            {{ exceptions.raise_compiler_error("incremental_merge requires business_key metadata for dataset: " ~ dataset_id) }}
+            {{ exceptions.raise_compiler_error(strategy ~ " requires business_key metadata for dataset: " ~ dataset_id) }}
         {%- endif -%}
         {%- set unique_key = keys[0] if keys | length == 1 else keys -%}
         {%- do config(materialized='incremental', incremental_strategy='merge', unique_key=unique_key) -%}
