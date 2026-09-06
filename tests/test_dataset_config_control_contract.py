@@ -19,6 +19,14 @@ class DatasetConfigControlContractTests(unittest.TestCase):
         self.assertNotIn("P_PROJECT_CODE", text)
         self.assertNotIn("P_ENVIRONMENT", text)
 
+    def test_bulk_registration_executes_only_domain_scoped_calls(self) -> None:
+        path = self.repo_root / "dbt_package" / "macros" / "operations" / "dataset_config.sql"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("macro esf_register_all_dataset_config_snapshots", text)
+        self.assertIn("esf_domain_register_dataset_config_call_sql", text)
+        self.assertIn("run_query(call_sql)", text)
+        self.assertNotIn("run_query('insert into PLATFORM_CONTROL.CONFIG.DATASET_CONFIG_SNAPSHOT", text)
+
     def test_scd1_is_explicit_standard_strategy(self) -> None:
         schema = json.loads(
             (self.repo_root / "project_schema" / "dataset.schema.json").read_text(encoding="utf-8")

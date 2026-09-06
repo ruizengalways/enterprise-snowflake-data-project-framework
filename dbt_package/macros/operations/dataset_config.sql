@@ -59,3 +59,27 @@ call {{ procedure_relation }}(
     parse_json({{ enterprise_snowflake_framework.esf_sql_literal(snapshot['config_json']) }})
 )
 {%- endmacro %}
+
+{% macro esf_register_all_dataset_config_snapshots(project_code, git_sha) -%}
+    {%- if git_sha is not string or git_sha | trim == '' -%}
+        {{ exceptions.raise_compiler_error('git_sha must be a non-empty string') }}
+    {%- endif -%}
+    {%- set snapshots = var('esf_dataset_snapshots', {}) -%}
+    {%- if snapshots | length == 0 -%}
+        {{ exceptions.raise_compiler_error('esf_dataset_snapshots must contain at least one validated dataset') }}
+    {%- endif -%}
+    {%- set registered = namespace(count=0) -%}
+    {%- for dataset_id in snapshots.keys() | sort -%}
+        {%- set call_sql = enterprise_snowflake_framework.esf_domain_register_dataset_config_call_sql(
+            project_code,
+            dataset_id,
+            git_sha
+        ) -%}
+        {%- if execute -%}
+            {%- do run_query(call_sql) -%}
+        {%- endif -%}
+        {%- set registered.count = registered.count + 1 -%}
+    {%- endfor -%}
+    {{ log('registered ' ~ registered.count ~ ' dataset config snapshot(s) for ' ~ (project_code | upper), info=true) }}
+    {{ return(registered.count) }}
+{%- endmacro %}
