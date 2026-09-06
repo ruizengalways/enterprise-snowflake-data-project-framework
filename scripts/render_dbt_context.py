@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pr-number", type=int)
     parser.add_argument("--run-id")
     parser.add_argument("--git-sha")
-    parser.add_argument("--default-schema", default="STAGING")
+    parser.add_argument("--default-schema", default="SILVER_STAGING")
     parser.add_argument(
         "--schema-dir",
         type=Path,

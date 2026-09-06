@@ -9,5 +9,5 @@ esf_dbt_smoke:
       role: AR_HEALTH_CI
       database: "{{ env_var('DBT_DATABASE') }}"
       warehouse: "{{ env_var('DBT_WAREHOUSE') }}"
-      schema: "{{ env_var('DBT_DEFAULT_SCHEMA', 'STAGING') }}"
+      schema: "{{ env_var('DBT_DEFAULT_SCHEMA', 'SILVER_STAGING') }}"
       threads: 1

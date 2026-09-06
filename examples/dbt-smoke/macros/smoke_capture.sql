@@ -9,26 +9,26 @@
 
     {%- set standard_stream_sql -%}
 {{ enterprise_snowflake_framework.esf_standard_stream_sql(
-    'CI_HEALTH.PR_123_STAGING.PATIENT_CURRENT_STREAM',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_CURRENT_SOURCE', false,
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_CURRENT_STREAM',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_CURRENT_SOURCE', false,
     'Consume native Snowflake row changes including updates and deletes'
 ) }}
     {%- endset -%}
 
     {%- set stream_sql -%}
 {{ enterprise_snowflake_framework.esf_append_only_stream_sql(
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT', false,
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT_STREAM',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT', false,
     'Consume immutable patient CDC events'
 ) }}
     {%- endset -%}
 
     {%- set task_sql -%}
 {{ enterprise_snowflake_framework.esf_triggered_task_sql(
-    'CI_HEALTH.PR_123_STAGING.PROCESS_PATIENT_EVENT',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PROCESS_PATIENT_EVENT',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT_STREAM',
     'WH_HEALTH_CI',
-    'insert into CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_CONSUMED select * from CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM',
+    'insert into CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT_CONSUMED select * from CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT_STREAM',
     30, 3600000, 1, 3, 'NO_OVERLAP', 'Process immutable patient CDC events', true
 ) }}
     {%- endset -%}
@@ -54,27 +54,27 @@
 
     {%- set native_freshness_schedule_sql -%}
 {{ enterprise_snowflake_framework.esf_native_dmf_schedule_sql(
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT', 'TRIGGER_ON_CHANGES', 'TABLE'
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT', 'TRIGGER_ON_CHANGES', 'TABLE'
 ) }}
     {%- endset -%}
 
     {%- set native_freshness_dmf_sql -%}
 {{ enterprise_snowflake_framework.esf_native_freshness_dmf_sql(
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT',
     60, 120, 'AR_HEALTH_ADMIN', none, 'TABLE'
 ) }}
     {%- endset -%}
 
     {%- set native_dmf_status_sql -%}
 {{ enterprise_snowflake_framework.esf_native_dmf_expectation_status_sql(
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT', 'TABLE'
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT', 'TABLE'
 ) }}
     {%- endset -%}
 
     {%- set reconciliation_sql -%}
 {{ enterprise_snowflake_framework.esf_reconciliation_compare_sql(
-    'CI_HEALTH.PR_123_STAGING.PATIENT_SOURCE',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_TARGET',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_SOURCE',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_TARGET',
     'source', 'target', ['patient_id'], 'source_updated_at'
 ) }}
     {%- endset -%}
@@ -95,15 +95,15 @@
 
     {%- set scd1_sql -%}
 {{ enterprise_snowflake_framework.esf_scd1_merge_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_CHANGES',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_CURRENT',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_CHANGES',
     ['patient_id'], ['source_sequence'], 'op', ['D']
 ) }}
     {%- endset -%}
 
     {%- set scd2_history_sql -%}
 {{ enterprise_snowflake_framework.esf_scd2_event_history_select(
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT', ['patient_id'],
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT', ['patient_id'],
     'source_updated_at', ['source_updated_at', 'source_sequence'],
     'record_hash', 'op', ['D']
 ) }}
@@ -111,9 +111,9 @@
 
     {%- set scd2_rebuild_sql -%}
 {{ enterprise_snowflake_framework.esf_scd2_rebuild_affected_keys_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_AFFECTED_KEYS',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_AFFECTED_KEYS',
     ['patient_id'], 'source_updated_at', ['source_updated_at', 'source_sequence'],
     'record_hash', 'op', ['D']
 ) }}
@@ -121,18 +121,18 @@
 
     {%- set scd2_snapshot_sql -%}
 {{ enterprise_snowflake_framework.esf_scd2_snapshot_apply_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_SNAPSHOT_HISTORY',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_SNAPSHOT', ['patient_id'], 'record_hash',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_SNAPSHOT_HISTORY',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_SNAPSHOT', ['patient_id'], 'record_hash',
     "to_timestamp_tz('2026-08-29 00:00:00 +00:00')"
 ) }}
     {%- endset -%}
 
     {%- set scd2_stream_task_sql -%}
 {{ enterprise_snowflake_framework.esf_scd2_stream_task_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PROCESS_PATIENT_HISTORY',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM',
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PROCESS_PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT_STREAM',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT',
     'WH_HEALTH_CI', ['patient_id'], 'source_updated_at',
     ['source_updated_at', 'source_sequence'], 'record_hash', 'op', ['D'],
     30, 3600000, 1, 3, 'Transactional SCD2 stream consumer', false
@@ -141,8 +141,8 @@
 
     {%- set scd1_dt_sql -%}
 {{ enterprise_snowflake_framework.esf_scd1_dynamic_table_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT_DT',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_CURRENT_DT',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT',
     'WH_HEALTH_CI', '5 minutes', ['patient_id'], ['source_sequence'],
     'ADAPTIVE', 'op', ['D']
 ) }}

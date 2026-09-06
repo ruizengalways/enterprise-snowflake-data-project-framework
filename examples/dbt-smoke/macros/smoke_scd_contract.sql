@@ -1,8 +1,8 @@
 {% macro smoke_scd_contract_sql() -%}
     {%- set target_sql -%}
 {{ enterprise_snowflake_framework.esf_scd2_target_table_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY',
-    'CI_HEALTH.PR_123_STAGING.PATIENT_EVENT',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT',
     true,
     'Patient history SCD2 target'
 ) }}
@@ -10,35 +10,35 @@
 
     {%- set multiple_current_sql -%}
 {{ enterprise_snowflake_framework.esf_scd2_multiple_current_violations_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_HISTORY',
     ['patient_id']
 ) }}
     {%- endset -%}
 
     {%- set invalid_ranges_sql -%}
 {{ enterprise_snowflake_framework.esf_scd2_invalid_range_violations_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_HISTORY',
     ['patient_id']
 ) }}
     {%- endset -%}
 
     {%- set overlap_sql -%}
 {{ enterprise_snowflake_framework.esf_scd2_overlap_violations_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_HISTORY',
     ['patient_id']
 ) }}
     {%- endset -%}
 
     {%- set duplicate_version_sql -%}
 {{ enterprise_snowflake_framework.esf_scd2_duplicate_version_violations_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_HISTORY',
     ['patient_id']
 ) }}
     {%- endset -%}
 
     {%- set summary_sql -%}
 {{ enterprise_snowflake_framework.esf_scd2_invariant_summary_sql(
-    'CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY',
+    'CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_HISTORY',
     ['patient_id']
 ) }}
     {%- endset -%}

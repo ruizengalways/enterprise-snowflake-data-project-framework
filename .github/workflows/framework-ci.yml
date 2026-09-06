@@ -37,7 +37,7 @@ jobs:
           python scripts/render_dbt_vars.py --project-root examples/minimal-project
           python scripts/render_workspace_sql.py \
             --kind pr --action create --database CI_HEALTH --pr-number 123 \
-            --layers staging marts
+            --layers silver_staging gold_marts
           python scripts/render_query_tag.py \
             --project health --environment ci --workload pr_ci \
             --dataset patient --pr-number 123 \
@@ -111,25 +111,25 @@ jobs:
           MANIFEST=examples/dbt-smoke/target/manifest.json
           python scripts/assert_dbt_manifest.py \
             --manifest "$MANIFEST" --model example \
-            --database CI_HEALTH --schema PR_123_STAGING
+            --database CI_HEALTH --schema PR_123_SILVER_STAGING
           python scripts/assert_dbt_manifest.py \
             --manifest "$MANIFEST" --model smoke_full_refresh \
-            --database CI_HEALTH --schema PR_123_STAGING --materialized table
+            --database CI_HEALTH --schema PR_123_SILVER_STAGING --materialized table
           python scripts/assert_dbt_manifest.py \
             --manifest "$MANIFEST" --model smoke_append_only \
-            --database CI_HEALTH --schema PR_123_STAGING \
+            --database CI_HEALTH --schema PR_123_SILVER_STAGING \
             --materialized incremental --incremental-strategy append
           python scripts/assert_dbt_manifest.py \
             --manifest "$MANIFEST" --model smoke_incremental_merge \
-            --database CI_HEALTH --schema PR_123_STAGING \
+            --database CI_HEALTH --schema PR_123_SILVER_STAGING \
             --materialized incremental --incremental-strategy merge --unique-key id
           python scripts/assert_dbt_manifest.py \
             --manifest "$MANIFEST" --model smoke_capture_merge \
-            --database CI_HEALTH --schema PR_123_STAGING \
+            --database CI_HEALTH --schema PR_123_SILVER_STAGING \
             --pre-hook-contains "when matched and source"
           python scripts/assert_dbt_manifest.py \
             --manifest "$MANIFEST" --model smoke_capture_dynamic_table \
-            --database CI_HEALTH --schema PR_123_STAGING \
+            --database CI_HEALTH --schema PR_123_SILVER_STAGING \
             --pre-hook-contains "refresh_mode = INCREMENTAL"
           jq -e '
             .nodes
@@ -161,17 +161,17 @@ jobs:
           grep -qi "'INSERT' as _esf_change_type" "$FILE"
           grep -qi "'UPDATE' as _esf_change_type" "$FILE"
           grep -qi "'DELETE' as _esf_change_type" "$FILE"
-          grep -qi "create stream if not exists CI_HEALTH.PR_123_STAGING.PATIENT_CURRENT_STREAM" "$FILE"
+          grep -qi "create stream if not exists CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_CURRENT_STREAM" "$FILE"
           grep -qi "append_only = false" "$FILE"
-          grep -qi "create stream if not exists CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"
+          grep -qi "create stream if not exists CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT_STREAM" "$FILE"
           grep -qi "append_only = true" "$FILE"
           grep -qi "show_initial_rows = false" "$FILE"
-          if grep -qi "create or alter stream CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"; then
+          if grep -qi "create or alter stream CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT_STREAM" "$FILE"; then
             echo "Routine deployment must not ALTER/replace an offset-bearing Stream." >&2
             exit 1
           fi
-          grep -qi "create or alter task CI_HEALTH.PR_123_STAGING.PROCESS_PATIENT_EVENT" "$FILE"
-          grep -qi "system\$stream_has_data('CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM')" "$FILE"
+          grep -qi "create or alter task CI_HEALTH.PR_123_SILVER_STAGING.PROCESS_PATIENT_EVENT" "$FILE"
+          grep -qi "system\$stream_has_data('CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT_STREAM')" "$FILE"
           grep -qi "task_auto_retry_attempts = 1" "$FILE"
           grep -qi "suspend_task_after_num_failures = 3" "$FILE"
           grep -qi "overlap_policy = NO_OVERLAP" "$FILE"
@@ -202,20 +202,20 @@ jobs:
         run: |
           set -euo pipefail
           FILE="${RUNNER_TEMP}/capture-render.txt"
-          grep -qi "create or alter dynamic table CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT_DT" "$FILE"
+          grep -qi "create or alter dynamic table CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_CURRENT_DT" "$FILE"
           grep -qi "refresh_mode = ADAPTIVE" "$FILE"
-          grep -qi "merge into CI_HEALTH.PR_123_CANONICAL.PATIENT_CURRENT" "$FILE"
+          grep -qi "merge into CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_CURRENT" "$FILE"
           grep -qi "_esf_version_ordinal" "$FILE"
           grep -qi "lead(\"source_updated_at\")" "$FILE"
-          grep -qi "update CI_HEALTH.PR_123_CANONICAL.PATIENT_SNAPSHOT_HISTORY" "$FILE"
+          grep -qi "update CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_SNAPSHOT_HISTORY" "$FILE"
           grep -qi "_esf_is_current = false" "$FILE"
-          grep -qi "create or alter task CI_HEALTH.PR_123_CANONICAL.PROCESS_PATIENT_HISTORY" "$FILE"
-          grep -qi "delete from CI_HEALTH.PR_123_CANONICAL.PATIENT_HISTORY" "$FILE"
-          grep -qi "from CI_HEALTH.PR_123_STAGING.PATIENT_EVENT_STREAM" "$FILE"
+          grep -qi "create or alter task CI_HEALTH.PR_123_SILVER_CANONICAL.PROCESS_PATIENT_HISTORY" "$FILE"
+          grep -qi "delete from CI_HEALTH.PR_123_SILVER_CANONICAL.PATIENT_HISTORY" "$FILE"
+          grep -qi "from CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_EVENT_STREAM" "$FILE"
           grep -qi "begin transaction" "$FILE"
           grep -qi "rollback" "$FILE"
           grep -qi "raise" "$FILE"
-          if grep -qi "insert overwrite into CI_HEALTH.PR_123_STAGING.PATIENT_AFFECTED_KEYS" "$FILE"; then
+          if grep -qi "insert overwrite into CI_HEALTH.PR_123_SILVER_STAGING.PATIENT_AFFECTED_KEYS" "$FILE"; then
             echo "Stream SCD2 must use repeatable Stream reads, not a shared affected-key work table." >&2
             exit 1
           fi

@@ -14,7 +14,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workload", required=True, choices=["query", "transform", "ci"])
     parser.add_argument("--developer")
     parser.add_argument("--pr-number", type=int)
-    parser.add_argument("--default-schema", default="STAGING")
+    parser.add_argument("--default-schema", default="SILVER_STAGING")
     parser.add_argument("--format", choices=["json", "env"], default="json")
     return parser.parse_args()
 

@@ -70,4 +70,4 @@ vars:
 models:
   esf_dbt_smoke:
     staging:
-      +schema: STAGING
+      +schema: SILVER_STAGING
