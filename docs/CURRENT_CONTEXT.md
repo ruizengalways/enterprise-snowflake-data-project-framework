@@ -10,13 +10,15 @@ PR #2  feature/metadata-driven-scd2-contract
       -> PR #4  feature/medallion-config-snapshot-contract
 ```
 
-Current PR #4 head and domain pin:
+Verified implementation/domain pin for PR #4:
 
 ```text
 02e3fca78b453e8a39a1722ce96b15dfc98d7cf8
 Framework CI #175: SUCCESS
 Bootstrap Contract CI #7: SUCCESS
 ```
+
+Later commits on the PR #4 branch may be documentation-only. Domain repositories should not repin solely because handoff prose changed.
 
 PR #4 is intentionally stacked on PR #3. Retarget each PR after the lower stack merges.
 
@@ -84,7 +86,7 @@ Platform-infra PR #2 implements the matching Medallion schemas and CONFIG contro
 
 ```text
 PR #2 feature/medallion-dataset-control-plane
-head a086401844d764dee1ef8e8053abe73855878b6e
+verified implementation head a086401844d764dee1ef8e8053abe73855878b6e
 Terraform CI: SUCCESS
 Platform Control SQL CI: SUCCESS
 ```
@@ -93,9 +95,9 @@ Platform-infra PR #1 remains the lower dependency for domain-scoped runtime/boot
 
 ## Domain consumers
 
-Transport PR #3 is stacked on its runtime/SCD2/bootstrap PRs and pins this framework SHA. Its Metadata CI and dbt Static CI are green. `vehicle_status` is the reference standard SCD2 consumer.
+Transport PR #3 is stacked on its runtime/SCD2/bootstrap PRs and pins the verified framework implementation SHA above. Its Metadata CI and dbt Static CI are green. `vehicle_status` is the reference standard SCD2 consumer.
 
-Health PR #2 is stacked on Health PR #1 and pins this framework SHA. Its `patient` reference is intentionally `scd1_merge`: the current RAW reference contract does not declare real business attributes suitable for SCD2 tracking, so Health does not fabricate tracked columns merely for symmetry.
+Health PR #2 is stacked on Health PR #1 and pins the same framework SHA. Its `patient` reference is intentionally `scd1_merge`: the current RAW reference contract does not declare real business attributes suitable for SCD2 tracking, so Health does not fabricate tracked columns merely for symmetry.
 
 Both domain PR Workspace workflows still require real Snowflake `ci` WIF configuration.
 
