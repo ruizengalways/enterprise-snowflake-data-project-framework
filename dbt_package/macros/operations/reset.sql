@@ -2,9 +2,9 @@
   Full dataset reset helpers.
 
   RESET is deliberately separate from repair/replay. The framework owns only the
-  bounded lifecycle calls and safe SQL assembly. Domain repositories explicitly
-  list reconstructable relations to clear; generic metadata never accepts
-  arbitrary caller-controlled relation names.
+  bounded lifecycle calls and safe SQL assembly/execution. Domain repositories
+  explicitly list reconstructable relations to clear; generic metadata never
+  accepts arbitrary caller-controlled relation names.
 #}
 
 {% macro esf_domain_reset_relation(project_code, object_name) -%}
@@ -81,6 +81,17 @@ call {{ enterprise_snowflake_framework.esf_domain_reset_procedure(project_code, 
     {{ return(normalized) }}
 {%- endmacro %}
 
+{% macro esf_reset_validate_relations(relations) -%}
+    {%- if relations is not sequence or relations is string or relations | length == 0 -%}
+        {{ exceptions.raise_compiler_error('full reset requires a non-empty explicit relations list') }}
+    {%- endif -%}
+    {%- set validated = [] -%}
+    {%- for relation in relations -%}
+        {%- do validated.append(enterprise_snowflake_framework.esf_reset_validate_relation(relation)) -%}
+    {%- endfor -%}
+    {{ return(validated) }}
+{%- endmacro %}
+
 {% macro esf_dataset_full_reset_sql(
     project_code,
     reset_id,
@@ -90,13 +101,7 @@ call {{ enterprise_snowflake_framework.esf_domain_reset_procedure(project_code, 
     git_sha=none,
     details_expression='NULL'
 ) -%}
-    {%- if relations is not sequence or relations is string or relations | length == 0 -%}
-        {{ exceptions.raise_compiler_error('full reset requires a non-empty explicit relations list') }}
-    {%- endif -%}
-    {%- set validated_relations = [] -%}
-    {%- for relation in relations -%}
-        {%- do validated_relations.append(enterprise_snowflake_framework.esf_reset_validate_relation(relation)) -%}
-    {%- endfor -%}
+    {%- set validated_relations = enterprise_snowflake_framework.esf_reset_validate_relations(relations) -%}
 
 {{ enterprise_snowflake_framework.esf_domain_reset_start_call_sql(
     project_code, reset_id, dataset_id, reason, git_sha, details_expression
@@ -109,4 +114,38 @@ truncate table if exists {{ relation }};
 {{ enterprise_snowflake_framework.esf_domain_reset_complete_call_sql(
     project_code, reset_id, dataset_id, details_expression
 ) }};
+{%- endmacro %}
+
+{% macro esf_execute_dataset_full_reset(
+    project_code,
+    reset_id,
+    dataset_id,
+    reason,
+    relations,
+    git_sha=none,
+    details_expression='NULL'
+) -%}
+    {%- if not execute -%}
+        {{ exceptions.raise_compiler_error('esf_execute_dataset_full_reset must be invoked with dbt run-operation against Snowflake') }}
+    {%- endif -%}
+    {%- set validated_relations = enterprise_snowflake_framework.esf_reset_validate_relations(relations) -%}
+    {%- set start_sql = enterprise_snowflake_framework.esf_domain_reset_start_call_sql(
+        project_code, reset_id, dataset_id, reason, git_sha, details_expression
+    ) -%}
+    {%- do log('Starting full reset for ' ~ (dataset_id | lower) ~ ' with reset_id=' ~ reset_id, info=true) -%}
+    {%- do run_query(start_sql) -%}
+
+    {# Intentionally execute one TRUNCATE at a time. If any relation fails, the
+       macro stops before RESET_COMPLETE and the lifecycle stays RESETTING. #}
+    {%- for relation in validated_relations -%}
+        {%- do log('Reset truncating ' ~ relation, info=true) -%}
+        {%- do run_query('truncate table if exists ' ~ relation) -%}
+    {%- endfor -%}
+
+    {%- set complete_sql = enterprise_snowflake_framework.esf_domain_reset_complete_call_sql(
+        project_code, reset_id, dataset_id, details_expression
+    ) -%}
+    {%- do run_query(complete_sql) -%}
+    {%- do log('Reset is READY_FOR_INITIAL_LOAD for ' ~ (dataset_id | lower), info=true) -%}
+    {{ return('reset ready for initial load') }}
 {%- endmacro %}
