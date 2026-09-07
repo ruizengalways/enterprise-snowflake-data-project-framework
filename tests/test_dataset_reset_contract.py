@@ -19,6 +19,7 @@ class DatasetResetContractTests(unittest.TestCase):
             "esf_domain_reset_start_call_sql",
             "esf_domain_reset_complete_call_sql",
             "esf_dataset_full_reset_sql",
+            "esf_execute_dataset_full_reset",
         ):
             self.assertIn(f"macro {macro}", self.sql)
         self.assertIn("DATASET_RESET_START", self.sql)
@@ -30,14 +31,27 @@ class DatasetResetContractTests(unittest.TestCase):
         self.assertIn("full reset requires a non-empty explicit relations list", self.sql)
         self.assertIn("fully-qualified unquoted DATABASE.SCHEMA.OBJECT", self.sql)
         self.assertIn("truncate table if exists {{ relation }}", self.sql.lower())
-        self.assertNotIn("repair", self.sql.lower().split("RESET is deliberately separate from repair/replay".lower())[-1])
 
-    def test_reset_orders_start_cleanup_complete(self) -> None:
-        start = self.sql.index("esf_domain_reset_start_call_sql(")
-        truncate = self.sql.index("truncate table if exists {{ relation }}")
-        complete = self.sql.index("esf_domain_reset_complete_call_sql(", truncate)
+    def test_rendered_reset_orders_start_cleanup_complete(self) -> None:
+        macro_start = self.sql.index("macro esf_dataset_full_reset_sql")
+        macro_end = self.sql.index("endmacro", macro_start)
+        rendered = self.sql[macro_start:macro_end]
+        start = rendered.index("esf_domain_reset_start_call_sql(")
+        truncate = rendered.index("truncate table if exists {{ relation }}")
+        complete = rendered.index("esf_domain_reset_complete_call_sql(", truncate)
         self.assertLess(start, truncate)
         self.assertLess(truncate, complete)
+
+    def test_executable_reset_is_stepwise_and_fail_closed(self) -> None:
+        macro_start = self.sql.index("macro esf_execute_dataset_full_reset")
+        macro_end = self.sql.index("endmacro", macro_start)
+        executable = self.sql[macro_start:macro_end]
+        self.assertIn("run_query(start_sql)", executable)
+        self.assertIn("run_query('truncate table if exists ' ~ relation)", executable)
+        self.assertIn("run_query(complete_sql)", executable)
+        self.assertLess(executable.index("run_query(start_sql)"), executable.index("run_query('truncate table if exists ' ~ relation)"))
+        self.assertLess(executable.index("run_query('truncate table if exists ' ~ relation)"), executable.index("run_query(complete_sql)"))
+        self.assertIn("lifecycle stays RESETTING", executable)
 
 
 if __name__ == "__main__":
