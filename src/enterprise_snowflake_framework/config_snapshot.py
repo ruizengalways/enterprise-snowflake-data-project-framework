@@ -9,6 +9,7 @@ _DATASET_KEYS = (
     "id",
     "owner_team",
     "raw_contract",
+    "load",
     "load_strategy",
     "implementation",
     "business_key",
@@ -48,7 +49,7 @@ def build_dataset_config_snapshot(
 
     Runtime context such as run_id/query_tag is deliberately excluded. The
     snapshot records only validated configuration that should be reproducible
-    from a Git revision.
+    from a Git revision. Both schema v1 and v2 are supported during migration.
     """
     dataset = dataset_document["dataset"]
     contract = raw_contract_document["contract"]
