@@ -1,0 +1,20 @@
+schema_version: 2
+dataset:
+  id: dimension_scd1
+  owner_team: example-data
+  raw_contract: contracts/raw/source_entity.yml
+  load:
+    strategy: scd1
+    execution:
+      mode: dbt_batch
+    business_key:
+      - entity_id
+    watermark_column: source_updated_at
+  freshness:
+    warn_after_minutes: 30
+    error_after_minutes: 120
+  reconciliation:
+    enabled: true
+    measures:
+      - row_count
+      - distinct_business_key
