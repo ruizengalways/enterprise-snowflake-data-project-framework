@@ -8,11 +8,18 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from .bootstrap_validation import validate_bootstrap_metadata
+from .dataset_metadata import (
+    DatasetMetadataError,
+    legacy_dataset_view,
+    normalize_dataset_document,
+    validate_execution_model,
+)
 from .scd2_validation import validate_scd2_metadata
 
 SCHEMA_FILES = {
     "project": "project.schema.json",
     "dataset": "dataset.schema.json",
+    "dataset_v2": "dataset-v2.schema.json",
     "raw_contract": "raw_contract.schema.json",
 }
 _KEYED_STRATEGIES = {
@@ -65,6 +72,15 @@ def load_document(path: Path) -> dict[str, Any]:
 
 def load_schema(schema_dir: Path, kind: str) -> dict[str, Any]:
     return json.loads((schema_dir / SCHEMA_FILES[kind]).read_text(encoding="utf-8"))
+
+
+def dataset_schema_kind(document: dict[str, Any]) -> str:
+    version = document.get("schema_version")
+    if version == 1:
+        return "dataset"
+    if version == 2:
+        return "dataset_v2"
+    return "dataset_v2"
 
 
 def schema_errors(document: dict[str, Any], schema: dict[str, Any], path: Path) -> list[str]:
@@ -202,8 +218,14 @@ def validate_dataset(
     project_root: Path,
     raw_schema: dict[str, Any],
 ) -> list[str]:
-    dataset = document["dataset"]
     errors: list[str] = []
+    try:
+        canonical = normalize_dataset_document(document)
+    except DatasetMetadataError as exc:
+        return [f"{path}: {exc}"]
+
+    errors.extend(validate_execution_model(canonical, path))
+    dataset = legacy_dataset_view(canonical)
 
     if dataset["load_strategy"] in _KEYED_STRATEGIES and not dataset.get("business_key"):
         errors.append(f"{path}: load_strategy {dataset['load_strategy']} requires dataset.business_key")
@@ -264,7 +286,6 @@ def validate_project_tree(project_root: Path, schema_dir: Path) -> list[str]:
         return [f"{datasets_dir}: required datasets directory not found"]
 
     project_schema = load_schema(schema_dir, "project")
-    dataset_schema = load_schema(schema_dir, "dataset")
     raw_schema = load_schema(schema_dir, "raw_contract")
 
     project_document = load_document(project_file)
@@ -278,6 +299,12 @@ def validate_project_tree(project_root: Path, schema_dir: Path) -> list[str]:
     seen_ids: dict[str, Path] = {}
     for dataset_path in dataset_paths:
         document = load_document(dataset_path)
+        version = document.get("schema_version")
+        if version not in {1, 2}:
+            errors.append(f"{dataset_path}: unsupported dataset schema_version: {version!r}")
+            continue
+
+        dataset_schema = load_schema(schema_dir, dataset_schema_kind(document))
         current_schema_errors = schema_errors(document, dataset_schema, dataset_path)
         errors.extend(current_schema_errors)
         if current_schema_errors:
