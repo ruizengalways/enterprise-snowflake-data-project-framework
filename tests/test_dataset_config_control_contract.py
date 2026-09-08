@@ -28,15 +28,25 @@ class DatasetConfigControlContractTests(unittest.TestCase):
         self.assertNotIn("run_query('insert into PLATFORM_CONTROL.CONFIG.DATASET_CONFIG_SNAPSHOT", text)
 
     def test_scd1_is_explicit_standard_strategy(self) -> None:
-        schema = json.loads(
+        legacy_schema = json.loads(
             (self.repo_root / "project_schema" / "dataset.schema.json").read_text(encoding="utf-8")
         )
-        strategies = schema["properties"]["dataset"]["properties"]["load_strategy"]["enum"]
-        self.assertIn("scd1_merge", strategies)
+        legacy_strategies = legacy_schema["properties"]["dataset"]["properties"]["load_strategy"]["enum"]
+        self.assertIn("scd1_merge", legacy_strategies)
+
+        v2_schema = json.loads(
+            (self.repo_root / "project_schema" / "dataset-v2.schema.json").read_text(encoding="utf-8")
+        )
+        v2_strategies = (
+            v2_schema["properties"]["dataset"]["properties"]["load"]["properties"]["strategy"]["enum"]
+        )
+        self.assertIn("scd1", v2_strategies)
+
         macro = (
             self.repo_root / "dbt_package" / "macros" / "loading" / "strategies.sql"
         ).read_text(encoding="utf-8")
-        self.assertIn("['incremental_merge', 'scd1_merge']", macro)
+        self.assertIn("'scd1_merge': ['scd1', 'dbt_batch']", macro)
+        self.assertIn("strategy in ['incremental_merge', 'scd1']", macro)
 
 
 if __name__ == "__main__":
