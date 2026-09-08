@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config_snapshot import build_dataset_config_snapshot
+from .dataset_metadata import legacy_dataset_view, normalize_dataset_document
 from .metadata_validation import MetadataValidationError, load_document, validate_project_tree
 from .query_tags import build_query_tag
 
@@ -21,6 +22,9 @@ def build_dbt_vars(
     Static Git configuration snapshots are produced separately from runtime
     query context so run IDs/query tags never change the deployment audit hash.
     Arbitrary SQL/business-rule fields are never exposed through this bridge.
+
+    Dataset schema v2 is canonical. A small set of legacy flat aliases remains
+    during migration so existing projects do not need a flag-day upgrade.
     """
     project_root = project_root.resolve()
     errors = validate_project_tree(project_root, schema_dir.resolve())
@@ -33,28 +37,34 @@ def build_dbt_vars(
 
     for path in sorted((project_root / "config" / "datasets").glob("*.y*ml")):
         dataset_document = load_document(path)
-        dataset = dataset_document["dataset"]
-        dataset_id = dataset["id"]
-        raw_contract_document = load_document(project_root / dataset["raw_contract"])
+        canonical = normalize_dataset_document(dataset_document)
+        legacy = legacy_dataset_view(canonical)
+        dataset_id = canonical["id"]
+        raw_contract_document = load_document(project_root / canonical["raw_contract"])
         raw_contract = raw_contract_document["contract"]
 
-        technical = {
-            key: value
-            for key, value in dataset.items()
-            if key
-            in {
-                "id",
-                "owner_team",
-                "raw_contract",
-                "load_strategy",
-                "implementation",
-                "business_key",
-                "watermark_column",
-                "scd2",
-                "freshness",
-                "reconciliation",
-            }
+        technical: dict[str, Any] = {
+            "schema_version": dataset_document["schema_version"],
+            "id": canonical["id"],
+            "owner_team": canonical["owner_team"],
+            "raw_contract": canonical["raw_contract"],
+            "load": canonical["load"],
         }
+        for key in ("freshness", "reconciliation"):
+            if key in canonical:
+                technical[key] = canonical[key]
+
+        # Temporary compatibility aliases. New macros should use `load`.
+        for key in (
+            "load_strategy",
+            "implementation",
+            "business_key",
+            "watermark_column",
+            "scd2",
+        ):
+            if key in legacy:
+                technical[key] = legacy[key]
+
         technical["source_system"] = raw_contract["source_system"]
         if raw_contract.get("capture"):
             technical["capture"] = raw_contract["capture"]
