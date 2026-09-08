@@ -1,0 +1,17 @@
+schema_version: 2
+dataset:
+  id: current_dynamic
+  owner_team: example-data
+  raw_contract: contracts/raw/source_entity.yml
+  load:
+    strategy: scd1
+    execution:
+      mode: dynamic_table
+      target_lag: 10 minutes
+    business_key:
+      - entity_id
+  freshness:
+    warn_after_minutes: 15
+    error_after_minutes: 60
+  reconciliation:
+    enabled: false
