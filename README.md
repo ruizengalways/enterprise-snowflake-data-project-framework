@@ -7,15 +7,25 @@ Versioned golden path for Snowflake domain/data-product repositories.
 For a new conversation or implementation session, read:
 
 1. `docs/CURRENT_CONTEXT.md` — active PRs, verified SHAs, blockers, merge order and next gate.
-2. `docs/patterns/dataset-control-plane.md` — Git-owned dataset configuration and runtime/control-plane boundary.
-3. `docs/patterns/metadata-driven-scd2.md` — standard SCD2 metadata and correctness model.
-4. `docs/patterns/bootstrap-handoff.md` — safe initial snapshot -> incremental/CDC handoff.
+2. `docs/architecture/DATASET_EXECUTION_MODEL.md` — dataset-level strategy/execution model and readable-SQL boundary.
+3. `docs/patterns/dataset-control-plane.md` — Git-owned dataset configuration and runtime/control-plane boundary.
+4. `docs/patterns/metadata-driven-scd2.md` — standard SCD2 metadata and correctness model.
+5. `docs/patterns/bootstrap-handoff.md` — safe initial snapshot -> incremental/CDC handoff.
 
 Human-readable architecture belongs in `docs/`. Machine contracts remain in `project_schema/`, project `config/`, RAW contracts, macros, scripts and tests.
 
 ## Responsibility
 
 This repository owns reusable technical behavior that should not be copied independently by Health, Transport or future domain repos. Domain business joins, calculations, source-specific extraction mechanics and genuinely custom logic remain explicit in the domain repository.
+
+The core design rule is:
+
+```text
+Metadata = HOW TO RUN
+SQL      = WHAT THE DATA MEANS
+```
+
+The framework must not turn YAML or Jinja into a replacement business-query language.
 
 ## Canonical data-project shape
 
@@ -41,11 +51,78 @@ PR_123_GOLD_MARTS
 
 Database placement is environment × domain/data product. Ordinary new physical sources do not require a new database or Terraform-created source schema; source identity stays in Git metadata and object naming unless governance requires an explicit isolation exception.
 
-## Metadata model
+A database is not a refresh-policy boundary. Every dataset/table independently declares how its target is maintained.
 
-Capture behavior and target/history behavior are separate dimensions.
+## Dataset metadata v2
 
-RAW/source contracts describe capture semantics such as:
+Dataset schema v2 separates **target semantics** from **execution mechanism**.
+
+Target semantics:
+
+```text
+load.strategy
+  full_refresh
+  append_only
+  incremental_merge
+  scd1
+  scd2
+  custom
+```
+
+Execution mechanism:
+
+```text
+load.execution.mode
+  dbt_batch
+  dbt_snapshot
+  dynamic_table
+  stream_task
+  custom
+```
+
+This lets a single domain database contain many tables with different requirements without inventing combined names for every implementation variant.
+
+For example:
+
+```text
+vehicle_status      scd2              + dbt_batch
+vehicle_position    append_only       + dbt_batch
+driver              scd1              + dbt_batch
+depot_reference     full_refresh      + dbt_batch
+current_trip_state  scd1              + dynamic_table
+special_vendor_feed custom            + custom
+```
+
+See `examples/readable-project/` for a validated mixed-strategy project.
+
+Schema v1 remains supported during migration. Legacy names such as `scd1_merge`, `scd2_snapshot`, `scd2_merge` and `scd2_stream_task` are normalized into the two v2 dimensions internally.
+
+Reusable parameters stay typed and bounded. Metadata must not describe joins, filters, CASE expressions, aggregations or other business transformations.
+
+## Readable dbt models
+
+For ordinary model materializations, project SQL uses one small configuration macro followed by normal SQL:
+
+```sql
+{{ enterprise_snowflake_framework.esf_apply_dataset_config('current_merge') }}
+
+select
+    entity_id,
+    value,
+    source_updated_at,
+    source_sequence
+from {{ source('bronze', 'source_entity') }}
+```
+
+`esf_apply_dataset_config` configures materialization only. It does not generate business SQL.
+
+SCD2 full-change event history remains a dedicated multi-statement technical primitive because it needs ordering, delete semantics and late-arrival correctness. The domain staging/event-shape model remains readable SQL and the technical apply step remains inside the framework.
+
+## Capture versus processing
+
+External ingestion remains outside this framework. Openflow, Snowpipe, Kafka connectors, Fivetran, Airbyte or a custom loader may land data into Bronze.
+
+RAW/source contracts describe landed-source semantics such as:
 
 ```text
 capture archetype
@@ -56,19 +133,7 @@ bootstrap handoff
 change semantics
 ```
 
-Dataset metadata describes downstream target behavior:
-
-```text
-full_refresh
-append_only
-incremental_merge
-scd1_merge
-scd2_snapshot
-scd2_merge
-scd2_stream_task
-```
-
-Reusable parameters stay typed and bounded. Metadata must not become a general-purpose workflow/SQL language; use `implementation: custom` when behavior is genuinely domain/source-specific.
+The framework owns post-ingestion processing from the Bronze contract onward, plus technical runtime control.
 
 ## Git configuration and PLATFORM_CONTROL
 
@@ -149,7 +214,7 @@ domain-scoped operational/control-plane API helpers
 reusable PR workspace and stable deployment workflows
 ```
 
-Snowflake-native TABLE / STREAM / TASK / MERGE / Snowflake Scripting remains the reliability baseline. Dynamic Tables are optional projections/execution choices, not the only SCD implementation.
+Snowflake-native TABLE / STREAM / TASK / MERGE / Snowflake Scripting remains the reliability baseline. Dynamic Tables are an optional declarative execution mode where the target semantics and Snowflake feature set fit.
 
 ## Proof boundary
 
