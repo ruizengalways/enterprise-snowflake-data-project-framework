@@ -1,0 +1,16 @@
+schema_version: 2
+dataset:
+  id: reference_full
+  owner_team: example-data
+  raw_contract: contracts/raw/source_entity.yml
+  load:
+    strategy: full_refresh
+    execution:
+      mode: dbt_batch
+  freshness:
+    warn_after_minutes: 60
+    error_after_minutes: 180
+  reconciliation:
+    enabled: true
+    measures:
+      - row_count
