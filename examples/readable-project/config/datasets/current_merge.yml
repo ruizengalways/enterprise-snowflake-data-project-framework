@@ -1,0 +1,20 @@
+schema_version: 2
+dataset:
+  id: current_merge
+  owner_team: example-data
+  raw_contract: contracts/raw/source_entity.yml
+  load:
+    strategy: incremental_merge
+    execution:
+      mode: dbt_batch
+    business_key:
+      - entity_id
+    watermark_column: source_updated_at
+  freshness:
+    warn_after_minutes: 15
+    error_after_minutes: 60
+  reconciliation:
+    enabled: true
+    measures:
+      - row_count
+      - distinct_business_key
