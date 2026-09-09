@@ -1,27 +1,24 @@
-# Dataset execution model
+# Dataset execution model v2
 
-## Purpose
-
-The framework is metadata-driven at the **dataset/table boundary**, not at the database boundary.
-
-A governed domain database can contain many tables with different refresh and history requirements. Each dataset independently chooses its target semantics and execution mechanism.
-
-The design rule is:
+The execution-policy boundary is the dataset/table, not the database.
 
 ```text
 Metadata = HOW TO RUN
 SQL      = WHAT THE DATA MEANS
 ```
 
-Metadata must not become a second programming language for joins, filters, CASE expressions, window functions, aggregations, or business rules.
+A single domain database may contain full refresh, append-only, merge, SCD1, SCD2, Dynamic Table and custom datasets at the same time. There is no database-level refresh strategy.
 
-## Two independent dimensions
+## Three orthogonal axes
 
-Dataset metadata v2 separates target semantics from execution mechanism.
+### Data semantics
 
-### `load.strategy`
+```yaml
+load:
+  strategy: scd2
+```
 
-Describes the observable target behavior:
+Allowed golden-path values:
 
 ```text
 full_refresh
@@ -32,154 +29,97 @@ scd2
 custom
 ```
 
-### `load.execution.mode`
+This says how data is maintained.
 
-Describes how that behavior is implemented:
-
-```text
-dbt_batch
-dbt_snapshot
-dynamic_table
-stream_task
-custom
-```
-
-This prevents strategy-name explosion such as `scd2_merge`, `scd2_snapshot`, `scd2_stream_task`, and future combinations. Those legacy v1 names remain accepted during migration and are normalized internally.
-
-## Example: one domain, independent tables
-
-```text
-TRANSPORT database
-
-vehicle_status      strategy=scd2              mode=dbt_batch
-vehicle_position    strategy=append_only       mode=dbt_batch
-driver              strategy=scd1              mode=dbt_batch
-depot_reference     strategy=full_refresh      mode=dbt_batch
-current_trip_state  strategy=scd1              mode=dynamic_table
-special_vendor_feed strategy=custom            mode=custom
-```
-
-The database is a governance/cost/data-product boundary. It is not a refresh-policy boundary.
-
-See `examples/readable-project/config/datasets/` for a validated mixed-strategy project.
-
-## Metadata v2 example
+### Materialization
 
 ```yaml
-schema_version: 2
-dataset:
-  id: vehicle_status
-  owner_team: transport-data
-  raw_contract: contracts/raw/vehicle_status.yml
-
-  load:
-    strategy: scd2
-    execution:
-      mode: dbt_batch
-
-    business_key:
-      - vehicle_id
-    watermark_column: source_updated_at
-
-    scd2:
-      effective_at_column: source_updated_at
-      order_columns:
-        - source_updated_at
-        - source_sequence
-      tracked_columns:
-        - status
-        - depot_id
-        - route_id
-      operation_column: source_operation
-      delete_values:
-        - D
-      late_arriving_policy: rebuild_affected_keys
+materialization:
+  type: table
 ```
 
-There is no metadata for business joins, CASE expressions, calculations, or aggregations.
+Golden-path values are `table`, `view`, `dynamic_table`, `snapshot`, and `custom`. This says what Snowflake/dbt object is produced.
 
-## Readable domain model
+### Runtime
 
-A normal batch model uses one small framework call at the top and keeps the body as ordinary SQL:
+```yaml
+runtime:
+  mode: dbt
+```
+
+Runtime values are `dbt`, `snowflake_managed`, `task`, `stream_task`, `external`, and `custom`. This says who executes or refreshes the object.
+
+These axes are deliberately independent. Combination names such as `scd2_merge`, `scd2_snapshot` and `scd2_stream_task` do not exist.
+
+## Readable SQL stays primary
+
+A dataset may use one small technical config call:
 
 ```sql
-{{ enterprise_snowflake_framework.esf_apply_dataset_config('current_merge') }}
+{{ enterprise_snowflake_framework.esf_apply_dataset_config('vehicle_status') }}
 
 select
-    entity_id,
-    value,
+    vehicle_id,
+    status,
+    depot_id,
+    route_id,
     source_updated_at,
     source_operation,
-    source_sequence,
-    ingested_at
-from {{ source('bronze', 'source_entity') }}
+    source_sequence
+from {{ ref('stg_vehicle_status') }}
 ```
 
-`esf_apply_dataset_config` configures materialization only. It must not generate business SQL.
+The Framework configures technical behavior only. JOIN, CASE, FILTER, GROUP BY, windows and business expressions remain in domain SQL.
 
-For example:
+## Source contract is separate
+
+Raw/source contract v2 describes source meaning and evidence fidelity:
 
 ```text
-full_refresh      + dbt_batch -> dbt table
-append_only       + dbt_batch -> dbt incremental append
-incremental_merge + dbt_batch -> dbt incremental merge
-scd1              + dbt_batch -> dbt incremental merge
-scd1              + dynamic_table -> Snowflake dynamic table
-custom            + custom -> framework leaves implementation explicit
+grain
+business key
+source timestamp
+CDC operation/sequence
+delete semantics
+capture fidelity
+ordering columns
+idempotency key
 ```
 
-## SCD2 is deliberately a technical primitive
+It does not name or configure Openflow, Kafka, Snowpipe, Fivetran, ADF or any other connector. Connector checkpoint ownership is outside this Framework.
 
-SCD2 history maintenance is multi-statement state management. For full-change CDC it can require affected-key rebuilds, delete semantics, ordering and late-arrival handling.
+## SCD2
 
-The domain transformation should still be readable SQL, for example `stg_vehicle_status.sql`. The technical SCD2 apply step consumes that event shape through the framework SCD2 primitive.
-
-The framework should not turn the domain model into a giant macro call that hides the event shape.
-
-`dbt_snapshot` remains suitable when the source contract is a current-state snapshot. `stream_task` remains suitable when explicit Snowflake procedural/stream processing is required.
-
-## Dynamic tables
-
-Dynamic tables are an execution mechanism, not a new business load strategy. They are a good fit when a target is declaratively expressible as a SELECT and Snowflake can own dependency refresh scheduling.
-
-The framework currently allows `dynamic_table` for `full_refresh`/current-result and `scd1` semantics. It rejects SCD2 history with dynamic tables.
-
-The dbt package uses the caller's `target.warehouse` rather than storing environment-specific physical warehouse names in dataset metadata.
-
-## Validation and compatibility
-
-Schema v1 remains accepted. The framework normalizes legacy values as follows:
+For `load.strategy: scd2`, `materialization.type: table`, the standard materialization maintains:
 
 ```text
-full_refresh     -> strategy=full_refresh      mode=dbt_batch
-append_only      -> strategy=append_only       mode=dbt_batch
-incremental_merge-> strategy=incremental_merge mode=dbt_batch
-scd1_merge       -> strategy=scd1              mode=dbt_batch
-scd2_snapshot    -> strategy=scd2              mode=dbt_snapshot
-scd2_merge       -> strategy=scd2              mode=dbt_batch
-scd2_stream_task -> strategy=scd2              mode=stream_task
-implementation=custom -> execution.mode=custom
+<ENTITY>_HISTORY
+<ENTITY>_HISTORY__ESF_EVENTS   technical landed-event ledger
 ```
 
-Existing capture/bootstrap/SCD2 validators continue to receive a compatibility projection while new code reads the canonical `load` object.
+On each run it identifies newly landed deterministic events, marks affected business keys, rebuilds complete history for those keys from retained landed evidence, and atomically replaces only those keys in the authoritative history. Replay is idempotent and late-arriving events repair the relevant history without rebuilding unrelated keys.
 
-This allows projects to migrate one dataset at a time.
+A normal `<ENTITY>_CURRENT` view filters `is_current = true` once for all current-state consumers.
 
-## Control-plane grain
+## SCD1
 
-Runtime state remains keyed at dataset grain:
+SCD1 is current-state correctness. Domain SQL chooses the deterministic winning row for the processing window; the bounded materialization performs keyed upsert and tombstone delete mechanics.
 
-```text
-project_code
-environment
-dataset_id
-generation
+## Dynamic Tables
+
+Dynamic Table is a materialization/runtime capability, not a load strategy. Gold declarative derivations are the default place to consider it:
+
+```yaml
+materialization:
+  type: dynamic_table
+  target_lag: 5 minutes
+  refresh_mode: adaptive
+runtime:
+  mode: snowflake_managed
 ```
 
-Checkpoint, bootstrap, DQ, reconciliation, reset and run history therefore remain independent per table/dataset even when many datasets share one database.
+The model remains normal SQL. Metadata never describes the `GROUP BY` or business join.
 
-## Non-goals
+## Custom
 
-The framework does not define external ingestion. Openflow, Snowpipe, Kafka connectors, Fivetran, Airbyte or a custom loader can land data into Bronze as long as the repository's raw contract is satisfied.
-
-The framework also does not encode business transformation SQL in YAML.
+`custom` is first-class on each axis. A custom dataset can still reuse query tags, observability, guarded control APIs, config snapshots, DQ, deployment and reset lifecycle without handing its business implementation to the Framework.

@@ -1,113 +1,57 @@
-# Dataset control plane and configuration snapshots
+# Dataset control plane v2
 
-## Purpose
-
-A business domain can contain many physical sources and hundreds of datasets. Those datasets may use different capture and target/history behaviors without creating a separate control system per source.
-
-The framework separates four concerns:
+The control plane standardizes operational mechanics without becoming the data plane.
 
 ```text
-Git dataset/source contracts
-        |
-        v
-validated technical configuration
-        |
-        +--> dbt/runtime strategy dispatch
-        |
-        +--> immutable deployment config snapshot
+DATA PLANE
+BRONZE -> SILVER -> GOLD
 
-PLATFORM_CONTROL runtime state
-  PIPELINE_RUN
-  PIPELINE_CHECKPOINT
-  PIPELINE_BOOTSTRAP
-  PIPELINE_CHECK_RESULT
+CONTROL PLANE
+validated dataset config
+config snapshot
+run state
+landed-data processing checkpoint
+bootstrap handoff
+DQ / reconciliation
+reset / generation
+observability
 ```
 
-## Capture strategy is not load/history strategy
+## Dataset grain
 
-How data is acquired from a source and how the target is maintained are independent dimensions.
+Runtime/config state is keyed by project + environment + dataset (+ generation where relevant). Datasets in one domain database can therefore use different maintenance and runtime policies without one giant database-level refresh policy.
 
-Examples:
+Strategy-specific parameters remain in typed Git metadata instead of a wide nullable control table.
 
-| Dataset | Capture | Target/history |
-| --- | --- | --- |
-| patient | full-change CDC | SCD2 |
-| provider | watermark | SCD1 merge |
-| claim | full refresh | full refresh |
-| lab_result | API cursor | append-only |
+## Source contract versus dataset config
 
-The RAW/source contract owns capture semantics such as checkpoint kind, ordering, idempotency and bootstrap handoff. Dataset metadata owns the target load/history strategy.
+Raw/source contract describes source semantics and evidence fidelity. Dataset config describes downstream Snowflake maintenance semantics. Neither contains connector implementation configuration.
 
-Supported standard load strategy vocabulary includes:
+A connector may be Openflow, Snowpipe, Kafka, Fivetran, Airbyte, ADF or custom code; once equivalent Bronze evidence is landed, downstream Framework behavior is the same.
+
+## Checkpoint boundary
+
+`PIPELINE_CHECKPOINT` is for processing progress over landed Snowflake data, for example a last processed landed batch, file identity, event boundary or timestamp already present in Bronze.
+
+It must not store or own:
 
 ```text
-full_refresh
-append_only
-incremental_merge
-scd1_merge
-scd2_snapshot
-scd2_merge
-scd2_stream_task
+SQL Server LSN
+Kafka connector offset
+API extraction cursor
+other connector-owned source position
 ```
 
-`scd1_merge` is explicit for current-state dimension semantics; `incremental_merge` remains available for generic keyed upsert datasets.
+Those belong to the ingestion system.
 
-## Do not build one giant control table
+## Security boundary
 
-Strategy-specific parameters stay in typed Git metadata. SCD2 fields exist only for SCD2 datasets. Capture-specific fields stay in the RAW contract. This avoids a wide table dominated by null columns and boolean flags.
+Domain runtime roles do not directly mutate shared `PLATFORM_CONTROL` base tables. Platform infra exposes project-filtered views and guarded domain procedures. Framework helpers derive only those approved relation/procedure names.
 
-Likewise, do not create one checkpoint/run table per source or per dataset. Runtime state is structurally stable and keyed by project/dataset identity.
+## Config snapshots
 
-## Git is the configuration source of truth
+Git remains desired configuration truth. A deployment snapshot records the validated dataset/raw-contract content, config SHA and Git SHA for audit and observability. The Snowflake snapshot table is not an editable parameter store.
 
-Project YAML/JSON contracts are validated in CI before they are exposed to dbt. The framework builds a bounded technical configuration for each dataset and a separate deterministic deployment snapshot.
+## Custom datasets
 
-A snapshot contains:
-
-- validated dataset technical metadata;
-- bounded source-contract semantics;
-- dataset/raw-contract schema versions;
-- canonical JSON;
-- SHA-256 configuration hash.
-
-Runtime values such as `run_id`, PR number and query tag are intentionally excluded from the configuration hash.
-
-The framework exposes snapshots through `esf_dataset_snapshots` and renders calls only to the platform-provisioned domain procedure:
-
-```text
-PLATFORM_CONTROL.CONFIG.<DOMAIN>_REGISTER_DATASET_CONFIG_SNAPSHOT
-```
-
-It never directly inserts, updates or deletes the shared base table.
-
-## Snowflake snapshot table is audit state, not editable config
-
-`PLATFORM_CONTROL.CONFIG.DATASET_CONFIG_SNAPSHOT` answers questions such as:
-
-- Which validated configuration was deployed for this dataset at this Git revision?
-- Did the SCD/load/capture parameters change between releases?
-- Which config hash corresponds to a historical deployment?
-
-It is not a UI-editable parameter store. Production configuration changes go through Git review and CI.
-
-A repeated registration of the same project/environment/dataset/Git SHA and the same content is idempotent. Reusing the same Git SHA with conflicting content must fail closed.
-
-## Database and Medallion boundary
-
-Database placement does not encode source or load strategy. A domain database uses stable Medallion-aligned schemas such as:
-
-```text
-BRONZE
-SILVER_STAGING
-SILVER_INTERMEDIATE
-SILVER_CANONICAL
-GOLD_MARTS
-GOLD_SEMANTIC
-DQ
-```
-
-Multiple ordinary sources coexist in `BRONZE`; source identity remains in metadata and object naming. A source-specific schema is a governance exception, not the default connector boundary.
-
-## Custom behavior
-
-Metadata should describe reusable technical behavior, not become a programming language. If a dataset needs genuinely source/domain-specific logic, declare `implementation: custom` and keep that implementation explicit in the domain repository while still using the shared runtime/control contracts where appropriate.
+Custom business implementation remains explicit domain code. Custom datasets may still register runs/config snapshots, use DQ/reconciliation, query tags and reset lifecycle.
