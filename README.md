@@ -75,10 +75,12 @@ control_plane/
 └── sql/
     ├── 001_objects.sql
     ├── 010_observability_views.sql
-    └── 020_refresh_health.sql
+    ├── 020_refresh_health.sql
+    ├── 030_sla_incident_lifecycle.sql
+    └── 040_health_task.sql
 ```
 
-The current model includes:
+The model includes:
 
 ```text
 DATASET
@@ -93,6 +95,8 @@ REPAIR_RUN
 VERSION_VALIDATION
 ```
 
+`030_sla_incident_lifecycle.sql` adds cadence-aware SLA evaluation and automatic incident lifecycle. `040_health_task.sql` creates a one-minute serverless health task. The task is created suspended and must be explicitly resumed after validation.
+
 Cross-domain health is read-only aggregation of each domain's stable health view. A domain can be maintained or decommissioned independently.
 
 ## CLI
@@ -101,6 +105,7 @@ Cross-domain health is read-only aggregation of each domain's stable health view
 python -m pip install .
 
 esf init-project --project-root .
+esf control-plan --project-root .
 esf add-source fleet_mssql --project-root .
 esf plan --source fleet_mssql --project-root .
 esf scaffold-preview customer --source fleet_mssql --project-root .
@@ -108,6 +113,14 @@ esf scaffold scd2 customer --source fleet_mssql --project-root .
 esf scaffold-all --source fleet_mssql --project-root .
 
 esf scaffold-version customer v2 --source fleet_mssql --project-root .
+
+esf sla-sql customer freshness_v1 \
+  --source fleet_mssql \
+  --stage END_TO_END \
+  --cadence CONTINUOUS \
+  --max-freshness-seconds 600 \
+  --project-root .
+
 esf repair-plan customer --source fleet_mssql --problem silver --project-root .
 esf repair-sql customer v2 --source fleet_mssql --from "2026-09-01 00:00:00" --project-root .
 esf release-sql customer --source fleet_mssql --from-version v1 --to-version v2 --project-root .
@@ -126,11 +139,13 @@ EXISTS
     -> DOMAIN OWNED FOREVER
 ```
 
-Once `silver_processing/<source>/<dataset>/` exists, normal scaffold commands change zero bytes inside it. A candidate version is a separate ownership unit under `versions/vN/`; if that version directory exists, `scaffold-version` changes zero bytes there as well. Generated repair/release directories use the same rule.
+Once `silver_processing/<source>/<dataset>/` exists, normal scaffold commands change zero bytes inside it. A candidate version is a separate ownership unit under `versions/vN/`; if that version directory exists, `scaffold-version` changes zero bytes there as well. Generated SLA/repair/release files use the same rule.
+
+Project initialization is also append-only. A Framework upgrade may introduce a new control migration file, but rerunning `init-project` never rewrites existing project files or the domain-owned `control_plane/deploy_manifest.txt`. Use `esf control-plan` to see which known control files are missing from the repo or deploy manifest.
 
 ## New dataset implementation layout
 
-A new dataset starter now contains executable Snowflake source-code skeletons rather than only comments:
+A new dataset starter contains explicit Snowflake source-code skeletons:
 
 ```text
 silver_processing/fleet_mssql/customer/
@@ -145,10 +160,11 @@ silver_processing/fleet_mssql/customer/
 ├── 030_task.sql
 ├── 040_register.sql
 ├── 050_publish.sql
+├── 060_policy.sql
 └── deploy_manifest.fragment.txt
 ```
 
-For standard patterns, this generates version-local physical objects, a Stream where appropriate, a SQL procedure, a Task, control-plane registration and stable published views. The generated code is intended to be read and changed by domain engineers.
+`060_policy.sql` is a commented logical-dataset SLA starter. It deliberately contains no guessed threshold. For standard patterns, the rest of the starter generates version-local physical objects, a Stream where appropriate, a SQL procedure, a Task, control-plane registration and stable published views. Generated code is intended to be read and changed by domain engineers.
 
 ## SCD2 default
 
@@ -158,24 +174,7 @@ The default SCD2 implementation keeps complete history in one physical history t
 WHERE IS_ACTIVE = TRUE
 ```
 
-Each version has its own physical history and current view:
-
-```text
-SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY
-SILVER.FLEET_MSSQL_CUSTOMER_V1_CURRENT
-
-SILVER.FLEET_MSSQL_CUSTOMER_V2_HISTORY
-SILVER.FLEET_MSSQL_CUSTOMER_V2_CURRENT
-```
-
-Consumers use stable published objects:
-
-```text
-SILVER.FLEET_MSSQL_CUSTOMER_HISTORY
-SILVER.FLEET_MSSQL_CUSTOMER_CURRENT
-```
-
-A separately materialized current table is optional when performance evidence justifies it.
+Each version has its own physical history and current view, while consumers use stable published objects. A separately materialized current table is optional when performance evidence justifies it.
 
 ## Stream + Task + procedure
 
@@ -205,9 +204,27 @@ v1 ACTIVE
   -> engineer reviews activate.sql / rollback.sql
 ```
 
-`025_compare.sql` compares the stable active published relation with the candidate implementation and writes generic evidence such as row count, business-key coverage and candidate key uniqueness into `CONTROL.VERSION_VALIDATION`. Domain-specific validation can be added directly to the file.
-
 `release-sql` only generates files. It does not connect to Snowflake and never performs cutover itself.
+
+## SLA and health
+
+SLA belongs to the logical dataset, not to the source manifest and not to V1/V2 implementation metadata.
+
+Git stores reviewable policy-change SQL under `operations/sla/`; `CONTROL.SLA_POLICY` stores the currently effective policy used by the evaluator. `esf sla-sql` creates a new revision file and never executes or overwrites it.
+
+Supported cadence models are:
+
+```text
+CONTINUOUS
+INTERVAL
+SCHEDULED_DEADLINE
+```
+
+Latency and freshness remain separate metrics. Policy can be stage-specific across Source -> Bronze, Bronze -> Silver, Silver -> Gold and end-to-end freshness.
+
+`CONTROL.SLA_EVALUATION_V` exposes current policy results. `CONTROL.EVALUATE_DOMAIN_HEALTH()` refreshes `DATASET_HEALTH` and manages automatic incidents for ingestion failure, Silver pipeline failure, dbt failure and SLA violations. Repeated evaluation updates one open incident per condition; recovery resolves it.
+
+The one-minute health task uses Snowflake-managed serverless task compute rather than waking the domain transformation warehouse just to refresh health.
 
 ## Repair
 
@@ -219,15 +236,9 @@ Silver wrong / Bronze correct -> candidate version + replay
 Bronze wrong                  -> repair ingestion, then replay downstream
 ```
 
-`repair-plan` is read-only. The first `repair-sql` implementation supports SCD2 candidate replay and writes explicit SQL under `operations/replay/`. Engineers review and run that SQL themselves. Active production objects are not modified by the generated replay script.
+`repair-plan` is read-only. `repair-sql` generates explicit SCD2 candidate replay SQL under `operations/replay/`. Engineers review and run that SQL themselves. Active production objects are not modified by the generated replay script.
 
 Replay, backfill and reset remain separate concepts.
-
-## SLA and health
-
-Each logical dataset can have stage-specific SLA policy. Latency and freshness are separate metrics. Cadence can be continuous, interval-based or scheduled-deadline. Domain run ledgers feed `CONTROL.DATASET_HEALTH` and dashboard-ready views.
-
-The control plane may centralize operational health/version/incident logic inside a domain, but it must not become a hidden business transformation engine.
 
 ## dbt and deployment
 
@@ -237,6 +248,6 @@ The reusable deployment workflow executes committed control-plane SQL first, the
 
 ## Deliberately absent
 
-The toolkit does not contain a universal source-discovery engine, universal ingestion orchestrator, central generic SCD runtime engine, runtime metadata routing, metadata-to-runtime transformation SQL generation, deployment-time scaffolding, automatic business Mart/KPI/Semantic generation, or connector-state engines for mature connectors that already own their checkpoint state.
+The toolkit does not contain a universal source-discovery engine, universal ingestion orchestrator, central generic SCD runtime engine, runtime metadata routing, metadata-to-runtime transformation SQL generation, deployment-time scaffolding, automatic SLA inference, automatic business Mart/KPI/Semantic generation, or connector-state engines for mature connectors that already own their checkpoint state.
 
 Live Snowflake/WIF acceptance remains a separate integration gate until a configured DEV Snowflake environment is available.

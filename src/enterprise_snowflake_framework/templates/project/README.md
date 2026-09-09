@@ -15,7 +15,7 @@ missing ownership unit -> create
 existing ownership unit -> never overwrite
 ```
 
-This applies to dataset roots, candidate `versions/vN/` directories and generated repair/release directories.
+This applies to dataset roots, candidate `versions/vN/` directories and generated SLA/repair/release files.
 
 This project owns a domain-local control plane under:
 
@@ -23,16 +23,28 @@ This project owns a domain-local control plane under:
 control_plane/
 ```
 
-The committed SQL creates this domain's `CONTROL` schema, operational ledgers, version/SLA state, health state and dashboard-ready views. It is not a shared global runtime database.
+The committed SQL creates this domain's `CONTROL` schema, operational ledgers, version/SLA state, health evaluation, incident lifecycle and dashboard-ready views. It is not a shared global runtime database.
 
 Start with:
 
 ```bash
+esf control-plan --project-root .
 esf add-source <source_id> --project-root .
 esf plan --source <source_id> --project-root .
 esf scaffold-preview <dataset> --source <source_id> --project-root .
 esf scaffold-all --source <source_id> --project-root .
 esf validate --project-root .
+```
+
+Define an SLA only after the domain agrees the operational expectation:
+
+```bash
+esf sla-sql <dataset> freshness_v1 \
+  --source <source_id> \
+  --stage END_TO_END \
+  --cadence CONTINUOUS \
+  --max-freshness-seconds 600 \
+  --project-root .
 ```
 
 Candidate / repair / release flow:
@@ -44,4 +56,4 @@ esf repair-sql <dataset> v2 --source <source_id> --project-root .
 esf release-sql <dataset> --source <source_id> --from-version v1 --to-version v2 --project-root .
 ```
 
-`repair-sql` and `release-sql` generate reviewable files only. They do not connect to Snowflake or execute production changes.
+`control-plan` and `repair-plan` are read-only. `sla-sql`, `repair-sql` and `release-sql` generate reviewable files only. They do not connect to Snowflake or execute production changes.

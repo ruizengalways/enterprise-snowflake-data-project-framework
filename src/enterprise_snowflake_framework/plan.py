@@ -17,6 +17,7 @@ STANDARD_DATASET_FILES = (
     "030_task.sql",
     "040_register.sql",
     "050_publish.sql",
+    "060_policy.sql",
     "deploy_manifest.fragment.txt",
 )
 

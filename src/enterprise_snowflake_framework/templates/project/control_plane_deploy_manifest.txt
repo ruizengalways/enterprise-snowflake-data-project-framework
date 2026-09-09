@@ -2,3 +2,5 @@
 control_plane/sql/001_objects.sql
 control_plane/sql/010_observability_views.sql
 control_plane/sql/020_refresh_health.sql
+control_plane/sql/030_sla_incident_lifecycle.sql
+control_plane/sql/040_health_task.sql

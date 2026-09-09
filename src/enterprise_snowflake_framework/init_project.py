@@ -19,6 +19,7 @@ PROJECT_DIRECTORIES = (
     "operations/replay",
     "operations/backfill",
     "operations/release",
+    "operations/sla",
     "docs",
     ".github/workflows",
 )
@@ -43,6 +44,8 @@ PROJECT_TEMPLATE_FILES = {
     "control_plane/sql/001_objects.sql": "control_plane_001_objects.sql",
     "control_plane/sql/010_observability_views.sql": "control_plane_010_observability_views.sql",
     "control_plane/sql/020_refresh_health.sql": "control_plane_020_refresh_health.sql",
+    "control_plane/sql/030_sla_incident_lifecycle.sql": "control_plane_030_sla_incident_lifecycle.sql",
+    "control_plane/sql/040_health_task.sql": "control_plane_040_health_task.sql",
     "dbt/dbt_project.yml": "dbt_project.yml",
     "dbt/profiles.yml": "profiles.yml",
     "silver_processing/deploy_manifest.txt": "deploy_manifest.txt",
@@ -50,6 +53,7 @@ PROJECT_TEMPLATE_FILES = {
     "operations/backfill/README.md": "backfill_README.md",
     "operations/reset/README.md": "reset_README.md",
     "operations/release/README.md": "release_README.md",
+    "operations/sla/README.md": "sla_README.md",
 }
 
 

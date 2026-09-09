@@ -12,6 +12,7 @@ from .pipeline_operations import (
     render_task_sql,
     render_version_yaml,
 )
+from .pipeline_policy import render_policy_sql
 from .pipeline_replay import render_replay_sql
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "render_compare_sql",
     "render_deploy_fragment",
     "render_objects_sql",
+    "render_policy_sql",
     "render_publish_sql",
     "render_register_sql",
     "render_release_sql",
