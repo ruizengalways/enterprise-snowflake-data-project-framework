@@ -1,0 +1,2 @@
+-- __DATASET_ID__: define the retained event ledger, authoritative history table and current view.
+-- Use explicit domain columns from __RAW_CONTRACT__.

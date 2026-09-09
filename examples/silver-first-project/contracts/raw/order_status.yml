@@ -1,0 +1,42 @@
+schema_version: 2
+contract:
+  source_system: orders_mssql
+  entity: order_status
+  grain: one row per order source change
+  business_key:
+    - order_id
+  source_timestamp: source_updated_at
+  columns:
+    - name: order_id
+      type: VARCHAR
+      nullable: false
+    - name: status
+      type: VARCHAR
+      nullable: true
+    - name: source_updated_at
+      type: TIMESTAMP_NTZ
+      nullable: false
+    - name: source_sequence
+      type: NUMBER
+      nullable: false
+    - name: source_operation
+      type: VARCHAR
+      nullable: false
+    - name: ingested_at
+      type: TIMESTAMP_NTZ
+      nullable: false
+  change_semantics:
+    mode: cdc
+    operation_column: source_operation
+    sequence_column: source_sequence
+    delete_semantics: tombstone
+    delete_values:
+      - D
+  capture_fidelity: full_change
+  ordering_columns:
+    - source_updated_at
+    - source_sequence
+  idempotency_key:
+    - order_id
+    - source_sequence
+  breaking_change_policy: versioned_contract

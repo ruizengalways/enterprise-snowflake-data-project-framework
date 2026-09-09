@@ -1,0 +1,1 @@
+-- Reference stateful processing SQL lives here in a real domain repository.

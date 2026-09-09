@@ -1,4 +1,4 @@
-name: Framework v2 CI
+name: Silver-first Toolkit CI
 
 on:
   pull_request:
@@ -9,8 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  contracts:
-    name: v2 contracts and stateful behavior
+  toolkit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -20,78 +19,33 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python -m pip install -e .
-      - name: Level 1 - metadata schema validation
-        run: python validation/validate_metadata.py --project-root examples/mixed-strategy-project
-      - name: Level 3 - focused SCD2 behavior oracle
-        run: |
-          python -m unittest discover -s tests -p 'test_clean_v2_contract.py' -v
-          python -m unittest discover -s tests -p 'test_scd2_behavior_oracle.py' -v
-      - name: Level 4 - static Snowflake and architecture contracts
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install .
+
+      - name: Validate reference project
+        run: esf validate --project-root examples/silver-first-project
+
+      - name: Test toolkit and reusable workflows
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Keep runtime indirection out of the toolkit
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R -n -E 'load_strategy|scd1_merge|scd2_merge|scd2_snapshot|scd2_stream_task|legacy_dataset_view|_V1_STRATEGY_MAP' project_schema src dbt_package examples/mixed-strategy-project; then
-            echo 'Legacy API found in active v2 code.' >&2
+          test ! -e dbt_package
+          test ! -e project_schema
+          test ! -e src/enterprise_snowflake_framework/dataset_metadata.py
+          test ! -e src/enterprise_snowflake_framework/dbt_context.py
+          test ! -e src/enterprise_snowflake_framework/dbt_vars.py
+          test ! -e src/enterprise_snowflake_framework/scd2_validation.py
+          test ! -e src/enterprise_snowflake_framework/config_snapshot.py
+          if grep -R -n -E 'esf_apply_dataset_config|esf_scd1_current|esf_scd2_history|materialization\.type|runtime\.mode' src examples/silver-first-project; then
+            echo 'Runtime/dbt abstraction leaked back into the Silver-first toolkit.' >&2
             exit 1
           fi
-          test ! -e dbt_package/macros/capture
-          test ! -e dbt_package/macros/loading
-          test ! -e dbt_package/macros/scd
-          test ! -e src/enterprise_snowflake_framework/bootstrap_validation.py
-          grep -Fq 'merge into' dbt_package/materializations/esf_scd1_current.sql
-          grep -Fq 'then delete' dbt_package/materializations/esf_scd1_current.sql
-          FILE=dbt_package/materializations/esf_scd2_history.sql
-          grep -Fq 'row_number() over' "$FILE"
-          grep -Fq 'lag(_esf_record_hash)' "$FILE"
-          grep -Fq 'lead(' "$FILE"
-          grep -Fq 'valid_from' "$FILE"
-          grep -Fq 'valid_to' "$FILE"
-          grep -Fq 'is_current' "$FILE"
-          grep -Fq 'version_order' "$FILE"
-          grep -Fq '__ESF_EVENTS' "$FILE"
-          grep -Fq 'identify_affected_keys' "$FILE"
-          grep -Fq 'begin transaction' "$FILE"
-          grep -Fq 'delete from {{ target_relation }}' "$FILE"
-          grep -Fq "where is_current = true" examples/mixed-strategy-project/dbt/models/silver/historical_entity_current.sql
-          if grep -Fq 'is_current' examples/mixed-strategy-project/dbt/models/gold/gold_aggregation.sql; then exit 1; fi
-          if grep -R -n -E 'merge into PLATFORM_CONTROL|update PLATFORM_CONTROL|insert into PLATFORM_CONTROL|delete from PLATFORM_CONTROL' dbt_package/macros; then exit 1; fi
+          grep -Fq 'affected business keys' src/enterprise_snowflake_framework/templates/scd2/README.md
+          grep -Fq 'Do not replace this with a shared runtime macro' src/enterprise_snowflake_framework/templates/append/010_apply.sql
+          grep -Fq 'dbt starts from trusted Silver' README.md
+          grep -Fq 'silver_processing/deploy_manifest.txt' .github/workflows/project-deploy.yml
 
-  dbt-offline:
-    name: Level 2 - dbt parse and render
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7.0.0
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: requirements-dbt.txt
-      - run: |
-          python -m pip install -r requirements-dbt.txt
-          python -m pip install -e .
-      - name: Parse all mixed strategies together without Snowflake
-        shell: bash
-        run: |
-          set -euo pipefail
-          PROJECT=examples/mixed-strategy-project
-          DBT_PROJECT=$PROJECT/dbt
-          VARS="$(python scripts/render_dbt_vars.py --project-root "$PROJECT")"
-          dbt deps --project-dir "$DBT_PROJECT" --profiles-dir "$DBT_PROJECT"
-          dbt parse --no-partial-parse --project-dir "$DBT_PROJECT" --profiles-dir "$DBT_PROJECT" --vars "$VARS"
-      - name: Assert rendered materialization routing in manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          M=examples/mixed-strategy-project/dbt/target/manifest.json
-          jq -e '.nodes | to_entries | any(.value.name == "reference_table" and .value.config.materialized == "table")' "$M" >/dev/null
-          jq -e '.nodes | to_entries | any(.value.name == "events" and .value.config.materialized == "incremental" and .value.config.incremental_strategy == "append")' "$M" >/dev/null
-          jq -e '.nodes | to_entries | any(.value.name == "current_entity" and .value.config.materialized == "incremental" and .value.config.incremental_strategy == "merge")' "$M" >/dev/null
-          jq -e '.nodes | to_entries | any(.value.name == "patient" and .value.config.materialized == "esf_scd1_current" and .value.config.meta.esf_dataset_id == "patient")' "$M" >/dev/null
-          jq -e '.nodes | to_entries | any(.value.name == "historical_entity_history" and .value.config.materialized == "esf_scd2_history" and .value.config.meta.esf_dataset_id == "historical_entity")' "$M" >/dev/null
-          jq -e '.nodes | to_entries | any(.value.name == "historical_entity_current" and .value.config.materialized == "view")' "$M" >/dev/null
-          jq -e '.nodes | to_entries | any(.value.name == "gold_aggregation" and .value.config.materialized == "dynamic_table")' "$M" >/dev/null
-
-# Level 5 remains separate: live WIF acceptance only when Snowflake is actually configured.
+# Live Snowflake/WIF acceptance remains a separate environment gate.

@@ -1,0 +1,6 @@
+-- __DATASET_ID__: validate SCD2 invariants.
+-- At minimum assert:
+--   one current row per business key;
+--   current rows have valid_to is null;
+--   historical intervals do not overlap;
+--   version_order is deterministic and gap-free for published versions.

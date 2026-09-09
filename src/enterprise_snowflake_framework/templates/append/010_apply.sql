@@ -1,0 +1,3 @@
+-- __DATASET_ID__: append new source events from BRONZE.__ENTITY_UPPER__.
+-- Keep the INSERT and NOT EXISTS idempotency predicate explicit in this file.
+-- Do not replace this with a shared runtime macro.

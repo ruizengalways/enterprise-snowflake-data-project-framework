@@ -4,13 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "enterprise-snowflake-data-project-framework"
-version = "0.1.0"
-description = "Reusable technical utilities for Enterprise Snowflake data projects"
+version = "0.2.0"
+description = "Contracts, scaffolding and CI guardrails for readable Enterprise Snowflake data projects"
 requires-python = ">=3.11"
 dependencies = [
   "jsonschema>=4.23,<5",
   "PyYAML>=6.0,<7",
 ]
 
+[project.scripts]
+esf = "enterprise_snowflake_framework.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+enterprise_snowflake_framework = [
+  "schemas/*.json",
+  "templates/*/*.md",
+  "templates/*/*.sql",
+]

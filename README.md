@@ -1,69 +1,85 @@
-# Enterprise Snowflake Data Project Framework v2
+# Enterprise Snowflake Data Project Toolkit
 
-A small technical framework for Snowflake domain repositories.
+This repository is intentionally **not a data runtime framework**.
 
-> **Metadata = HOW TO RUN**  
-> **SQL = WHAT THE DATA MEANS**
+Its job is to make domain repositories easy to start, validate, review and operate without hiding SQL behind shared Jinja/macros.
 
-This is a breaking redesign. There is no schema v1 support, no `load_strategy`, no compatibility aliases, and no migration bridge.
-
-## Ownership boundary
+## Architecture boundary
 
 ```text
-External source -> ingestion -> BRONZE | SILVER -> GOLD -> semantic
-                                     framework starts here
+Source
+  -> ingestion
+  -> BRONZE                 raw / replayable evidence
+  -> explicit Silver SQL    domain-owned Snowflake SQL
+  -> SILVER                 trusted current/history/canonical data
+  -> dbt
+  -> GOLD                   marts / dimensions / facts / KPI
+  -> SEMANTIC               consumption-facing models
 ```
 
-Openflow, Snowpipe, Kafka, Fivetran, Airbyte, ADF and custom ingestion may all land the same Bronze contract. The framework does not own connector checkpoints such as SQL Server LSNs, API cursors or Kafka source offsets. Mutable framework state begins with already-landed Snowflake data.
+`Source -> BRONZE` is ingestion responsibility. Connector positions such as SQL Server LSNs, Kafka offsets and API cursors remain with the ingestion technology.
 
-## Dataset metadata
+`BRONZE -> SILVER` is explicit Snowflake processing. SCD1, SCD2, deduplication, delete handling, replay and late-arrival correction live in readable SQL committed to the domain repository.
 
-Three independent axes describe a dataset:
+**dbt starts from trusted Silver.** It is used for the warehouse modeling work it is good at: facts, dimensions, marts, business joins, aggregations, tests, lineage, documentation and semantic models.
 
-```yaml
-load:
-  strategy: scd2
-materialization:
-  type: table
-runtime:
-  mode: dbt
-```
+## What is reusable
 
-Load strategies are `full_refresh`, `append_only`, `incremental_merge`, `scd1`, `scd2`, and `custom`. Materialization and runtime are intentionally separate so names like `scd2_stream_task` do not exist.
+The toolkit centralizes only things that remain useful without hiding runtime behavior:
 
-The raw/source contract is also v2. It describes source semantics, grain, keys, ordering, change/delete semantics, capture fidelity and idempotency identity. It does not describe a connector implementation or connector checkpoint ownership.
+- packaged JSON Schemas for project, RAW and Silver pipeline contracts;
+- `esf validate` for static contract checks;
+- `esf scaffold` for copying reference patterns into a domain repository;
+- reusable CI/deployment workflows;
+- human-readable reference patterns and tests.
 
-## Data plane
+Generated Silver SQL belongs to the domain team. It is committed, reviewed and modified in that repository. A later toolkit release does not silently change an already-deployed pipeline.
 
-- `BRONZE`: source-faithful landed data.
-- `SILVER_STAGING`: readable typing/dedup/normalization SQL.
-- `SILVER_INTERMEDIATE`: optional readable technical shaping.
-- `SILVER_CANONICAL`: authoritative current state and history correctness.
-- `GOLD_MARTS`: joins, KPIs, aggregations and reporting entities.
-- `GOLD_SEMANTIC`: semantic preparation.
+## What is deliberately not reusable runtime
 
-SCD2 publishes one authoritative `<entity>_history` table and a normal `<entity>_current` view. The SCD2 materialization keeps a technical landed-event ledger and rebuilds only affected business keys, so replay and late-arriving events remain deterministic without rebuilding unrelated history.
+There is no shared dbt package, no `esf_apply_dataset_config`, no custom dbt SCD materialization and no metadata-to-SQL runtime engine.
 
-Dynamic Tables are Gold-first and use `REFRESH_MODE = ADAPTIVE` when appropriate. Stateful Silver correctness is not hidden in Dynamic Table refresh behavior.
-
-## Framework layout
+A domain engineer should be able to understand a Silver pipeline by opening:
 
 ```text
-project_schema/                 machine-readable contracts
-src/enterprise_snowflake_framework/
-                                validation/config/runtime utilities
-dbt_package/macros/control/     guarded domain-scoped control-plane calls
-dbt_package/macros/quality/     bounded DQ helpers
-dbt_package/macros/utilities/   small compilation/config helpers
-dbt_package/materializations/   justified stateful SCD materializations
-snowflake/scd/                  stateful correctness policy
-examples/mixed-strategy-project/
-                                one project with all supported strategies
-docs/                           human-readable architecture and operations
+silver_processing/<dataset>/
+  README.md
+  pipeline.yml
+  001_objects.sql
+  010_apply.sql
+  020_validate.sql
 ```
 
-See `docs/architecture/HYBRID_ARCHITECTURE_V2.md`, `docs/architecture/DATASET_EXECUTION_MODEL.md`, `docs/architecture/MACRO_AUDIT.md`, and `examples/mixed-strategy-project/`.
+without reading this repository first.
 
-## CI levels
+## CLI
 
-CI deliberately favors focused proof over a large slow suite: schema/metadata validation, genuinely offline dbt parse + manifest/render assertions, an independent SCD2 behavior oracle, and static Snowflake/security contracts. Live Snowflake acceptance remains a separate WIF gate and must not be claimed until it actually executes successfully.
+```bash
+python -m pip install .
+
+esf validate --project-root ../enterprise-snowflake-transport-analytics
+
+esf scaffold scd2 vehicle_status \
+  --project-root ../enterprise-snowflake-transport-analytics \
+  --raw-contract contracts/raw/vehicle_status.yml
+```
+
+`scaffold` creates source files once. It does not participate when the pipeline runs.
+
+## Reuse model
+
+The initial scaffold patterns are `append`, `full_refresh`, `scd1` and `scd2`; `custom` is accepted by the Silver contract for domain-owned implementations that do not fit a standard starter.
+
+The SCD2 pattern preserves deterministic source ordering, idempotency, tombstone delete/reinsert semantics, authoritative history and affected-key late-arrival rebuild. The concrete SQL remains visible in the domain repository.
+
+## Deployment
+
+A domain repository commits `silver_processing/deploy_manifest.txt`. The reusable workflow validates the contracts, applies exactly those committed SQL files in order, and then runs ordinary dbt from Silver into Gold/Semantic. It does not generate Silver SQL at deploy time.
+
+## Control plane
+
+`PLATFORM_CONTROL` remains a separate enterprise concern for run/reset lifecycle, audit, quality and guarded domain-scoped operational APIs. Domain processing SQL may call those explicit APIs; it never receives direct DML on shared control tables.
+
+## Portability
+
+Domain standalone fixtures remain independent of this toolkit, `PLATFORM_CONTROL`, Terraform and enterprise WIF.
