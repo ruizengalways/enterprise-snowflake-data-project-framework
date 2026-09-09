@@ -2,68 +2,75 @@
 
 ## Logical and physical names
 
-Consumers should use stable published Silver names. Implementation versions stay behind that stable contract.
+Consumers use stable published Silver names. Implementation versions stay behind that stable contract.
 
-Example logical dataset:
-
-```text
-fleet_mssql.customer
-```
-
-Published object:
+For a new `fleet_mssql.customer` dataset, generated names preserve the source boundary:
 
 ```text
-SILVER.CUSTOMER_HISTORY
+BRONZE.FLEET_MSSQL_CUSTOMER
+
+SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY
+SILVER.FLEET_MSSQL_CUSTOMER_V1_CURRENT
+
+published:
+SILVER.FLEET_MSSQL_CUSTOMER_HISTORY
+SILVER.FLEET_MSSQL_CUSTOMER_CURRENT
 ```
 
-Candidate implementation objects may be versioned internally:
+A second source can therefore also contain a `customer` dataset without colliding:
 
 ```text
-SILVER_IMPL.CUSTOMER_V1_HISTORY
-SILVER_IMPL.CUSTOMER_V2_HISTORY
+SILVER.CRM_POSTGRES_CUSTOMER_CURRENT
 ```
 
-The exact physical naming strategy is a domain implementation detail, but consumers should not need to know whether v1 or v2 is active.
+Existing domain-owned object names are never rewritten by framework upgrades.
 
 ## Default SCD2 model
 
-The default SCD2 design is one physical history table containing all versions. Current-state access is represented by the active-row predicate, normally:
+The default SCD2 design is one physical history table per implementation version containing all historical versions. Current-state access is:
 
 ```sql
 WHERE IS_ACTIVE = TRUE
 ```
 
-A project may expose a stable current view for convenience:
+Each version also gets a version-local current view for shadow testing. Stable consumer views point at the active version.
 
-```sql
-CREATE VIEW SILVER.CUSTOMER_CURRENT AS
-SELECT *
-FROM SILVER.CUSTOMER_HISTORY
-WHERE IS_ACTIVE = TRUE;
-```
+A separately materialized current table is optional when performance evidence justifies it.
 
-A project may choose a separately materialized current table when performance evidence justifies it, but the framework does not require that physical design.
+## Implementation ownership
 
-## Candidate development
-
-An active version must continue serving production while a candidate version is developed.
+The initial implementation lives at the dataset root:
 
 ```text
-                    BRONZE.CUSTOMER
-                         |
-                +--------+--------+
-                |                 |
-            V1 stream         V2 stream
-                |                 |
-            V1 task           V2 task
-                |                 |
-            V1 apply          V2 apply
-                |                 |
-           V1 history        V2 history
-             ACTIVE             SHADOW
+silver_processing/fleet_mssql/customer/
 ```
 
-A candidate version may use an independent Snowflake Stream so its consumption progress cannot affect the active version.
+Candidate implementations live under independent ownership units:
+
+```text
+silver_processing/fleet_mssql/customer/versions/v2/
+silver_processing/fleet_mssql/customer/versions/v3/
+```
+
+If a version directory already exists, `scaffold-version` changes zero bytes in it.
+
+## Version-local execution objects
+
+Each standard implementation version gets its own physical objects and execution path.
+
+For SCD2 v2:
+
+```text
+BRONZE.FLEET_MSSQL_CUSTOMER_V2_STREAM
+SILVER.FLEET_MSSQL_CUSTOMER_V2_EVENTS
+SILVER.FLEET_MSSQL_CUSTOMER_V2_HISTORY
+SILVER.FLEET_MSSQL_CUSTOMER_V2_CURRENT
+SILVER.APPLY_FLEET_MSSQL_CUSTOMER_V2
+SILVER.REPLAY_FLEET_MSSQL_CUSTOMER_V2
+SILVER.FLEET_MSSQL_CUSTOMER_V2_TASK
+```
+
+V1 and V2 therefore consume the same Bronze source independently.
 
 ## Candidate lifecycle
 
@@ -79,57 +86,85 @@ DEVELOPMENT
   -> RETIRED
 ```
 
-`FAILED` can be entered from any deploy/test stage.
+`FAILED` may be entered from deploy/test stages.
+
+Operational flow:
+
+```text
+scaffold-version v2
+  -> deploy candidate SQL
+  -> historical replay/bootstrap
+  -> catch up stream
+  -> shadow
+  -> 020_validate.sql
+  -> 025_compare.sql
+  -> review CONTROL.VERSION_VALIDATION
+  -> release-sql
+  -> explicit activate.sql
+```
+
+A candidate is not accepted merely because its task ran successfully.
 
 ## Historical bootstrap
 
-A candidate version is not validated merely because it processes new events successfully.
+Create candidate objects before replay so the candidate Stream establishes its own offset. Replay can then rebuild retained historical evidence while new Bronze changes accumulate independently. After replay, run/catch up the candidate apply procedure. Idempotency defined by the RAW contract prevents replayed evidence from being duplicated when the stream later catches up.
 
-Release flow:
+This depends on Bronze retaining sufficient evidence. A source mode that only preserves current snapshots cannot reconstruct intermediate change history that never arrived in Bronze.
+
+## Candidate validation
+
+Every candidate gets:
 
 ```text
-DEPLOY
-  -> BOOTSTRAP / historical replay
-  -> CATCH UP
-  -> SHADOW
-  -> COMPARE
-  -> VALIDATE
-  -> ACTIVATE
+020_validate.sql
+025_compare.sql
 ```
 
-The candidate must be built from replayable Bronze history or another explicitly approved source of historical truth.
+`020_validate.sql` validates the candidate itself. `025_compare.sql` compares stable active published data with the candidate and writes generic evidence to `CONTROL.VERSION_VALIDATION`.
 
-## Version comparison
+Generic comparison includes, where applicable:
 
-Candidate-versus-active validation may compare:
-
+- current row count
 - business-key coverage
-- current active-row uniqueness
-- null keys
-- history row count
-- overlapping effective periods
-- missing/gapped history where applicable
-- selected aggregates
-- selected column hashes
-- sample differences
-- freshness
-- runtime
-- cost
+- candidate business-key uniqueness
+- SCD2 history row-count difference
 
-A successful SQL execution alone is not a release acceptance signal.
+History-count differences are marked for review rather than assumed to be failures because a corrected candidate may legitimately change history.
+
+Domain engineers can add business-specific comparisons directly to `025_compare.sql` after scaffold; the file becomes domain-owned.
 
 ## Activation
 
-Cutover should be lightweight because the candidate is already built and validated.
+`esf release-sql` generates a new review directory:
 
-Possible implementation techniques include stable views/pointers, object rename/swap or other domain-specific object switching. The framework should expose a release abstraction without forcing every dataset into one physical technique.
+```text
+operations/release/fleet_mssql/customer/v1_to_v2/
+├── README.md
+├── activate.sql
+└── rollback.sql
+```
 
-The first implementation must not make activation an autonomous metadata-driven runtime router.
+The command does not connect to Snowflake and does not execute cutover.
+
+The generated activation script:
+
+1. suspends the old task;
+2. repoints stable published view(s) to the candidate physical implementation;
+3. updates `CONTROL.DATASET_VERSION` and `CONTROL.DATASET`;
+4. resumes the new triggered task when the pattern has a Stream-based readiness model.
+
+Full-refresh/custom readiness remains domain-specific and is not guessed by the release generator.
 
 ## Rollback
 
-A recently retired implementation should remain available for a defined rollback window. Rollback should restore the stable published contract to a previously validated version without rebuilding the full history during the cutover itself.
+`rollback.sql` performs the inverse stable-view/control-state switch. A recently retired physical implementation should remain available for an approved rollback window. Rollback should not require rebuilding historical data during the cutover itself.
+
+## Deployment manifests
+
+Each implementation contains `deploy_manifest.fragment.txt`. It is a reviewable fragment showing the committed SQL that must be added to the domain-owned `silver_processing/deploy_manifest.txt` when the implementation is ready to deploy.
+
+The framework does not edit an existing global deployment manifest behind the engineer's back and does not scaffold at deployment time.
 
 ## Decommissioning
 
-Because control-plane state and physical implementation are domain-local, a dataset or whole domain can be retired without leaving mandatory runtime dependencies in a global control database.
+Because data/control state is domain-local, a dataset or whole domain can be retired without mandatory runtime dependencies on a global writable control database. Enterprise-wide health aggregation should only consume stable read-only domain health surfaces.

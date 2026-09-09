@@ -4,62 +4,112 @@
 
 This repository is a project-creation and operations toolkit for readable Enterprise Snowflake domain repositories. It is not a universal data runtime.
 
-The framework currently owns safe project/source scaffolding, RAW/Silver contract validation, explicit pattern templates and reusable CI/deployment workflows. Existing dataset directories are domain-owned and never overwritten by scaffolding.
+The framework owns safe project/source scaffolding, RAW/Silver contract validation, explicit pattern source-code generation, domain-local control-plane foundations and reusable CI/deployment workflows. Existing ownership units are never overwritten by scaffolding.
 
-## Confirmed architecture direction
+## Domain boundary
 
-### Source analysis
+One business domain is one domain repository and normally one domain Snowflake database per environment.
 
-Source profiling/discovery will be handled separately in the future. This framework starts after engineers understand the source well enough to define RAW contracts and dataset intent.
+```text
+enterprise-snowflake-transport-analytics
+  -> DEV_TRANSPORT / UAT_TRANSPORT / PROD_TRANSPORT
+```
 
-### Ingestion
+A domain may contain many sources. The source boundary is preserved in repository paths and in newly generated Snowflake object names so same-named datasets from different sources cannot collide by default.
 
-`ingestion/` is an integration boundary and example area. Projects may use Openflow, Snowpipe, Kafka connectors, external ETL/orchestrators or project-specific API ingestion. The framework does not implement a universal ingestion runtime or connector checkpoint engine.
+Example new naming:
 
-### Bronze -> Silver
+```text
+fleet_mssql.customer
+  -> BRONZE.FLEET_MSSQL_CUSTOMER
+  -> SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY
+  -> SILVER.FLEET_MSSQL_CUSTOMER_CURRENT
+```
 
-This is the framework's primary pipeline standardization area.
+Existing domain-owned pipelines are not renamed automatically.
+
+## Ingestion
+
+`ingestion/` is an integration boundary and example area. Projects may use Openflow, Snowpipe, Kafka connectors, external ETL/orchestrators or project-specific API ingestion. The framework does not implement a universal ingestion runtime or mature connector checkpoint engines.
+
+## Bronze -> Silver
+
+This is the framework's primary standardization area.
 
 Preferred Snowflake-native shape:
 
 ```text
-BRONZE -> Stream/readiness -> Task -> dataset-local SQL/procedure -> SILVER
+BRONZE -> Stream/readiness -> Task -> dataset-local SQL procedure -> SILVER
 ```
 
-Standard patterns remain append, full_refresh, scd1, scd2 and custom. Shared templates may generate dataset-local SQL/procedures, but there is no central metadata-driven SCD runtime.
+Standard patterns remain append, full_refresh, scd1, scd2 and custom. Pattern algorithms are reused at scaffold time to generate explicit dataset-local source code. There is no central metadata-driven SCD runtime.
 
-### Domain-local control plane
+New dataset starters include:
+
+```text
+pipeline.yml
+version.yml
+001_objects.sql
+010_apply.sql
+015_replay.sql
+020_validate.sql
+025_compare.sql
+030_task.sql
+040_register.sql
+050_publish.sql
+deploy_manifest.fragment.txt
+```
+
+## Domain-local control plane
 
 Each domain owns its own `CONTROL` schema. Do not create one shared writable `PLATFORM_CONTROL` database across all domains.
 
-Domain control-plane concerns include:
+The domain control plane includes dataset/version identity, SLA policy, ingestion/pipeline/dbt run evidence, health state, incidents, version validation and repair audit. Enterprise health dashboards may union stable read-only health views from each domain.
 
-- logical dataset registry
-- active/candidate version state
-- SLA policy
-- ingestion/pipeline/dbt run evidence
-- current health state
-- incidents
-- version validation
-- repair audit
+## SCD2 default
 
-Enterprise health dashboards may union stable health views published by each domain. The enterprise aggregation layer is read-only and is not a runtime dependency for domain pipelines.
+The default SCD2 model is one physical history table per implementation version. Current state is `IS_ACTIVE = TRUE` and is exposed through a version-local current view plus a stable published current view.
 
-### SCD2 default
+Example:
 
-The default SCD2 physical model is one history table containing all historical versions. Current state is represented by `IS_ACTIVE = TRUE`; a stable current view may be exposed for convenience. A separate physical current table is optional and must be justified by project performance needs.
+```text
+SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY
+SILVER.FLEET_MSSQL_CUSTOMER_V1_CURRENT
+SILVER.FLEET_MSSQL_CUSTOMER_V2_HISTORY
+SILVER.FLEET_MSSQL_CUSTOMER_V2_CURRENT
 
-### Versioning
+published:
+SILVER.FLEET_MSSQL_CUSTOMER_HISTORY
+SILVER.FLEET_MSSQL_CUSTOMER_CURRENT
+```
 
-Dataset implementations support active/candidate versions. Candidate versions are built in parallel, historically bootstrapped/replayed, shadow-tested and compared before lightweight cutover. Consumers use stable published Silver names and do not need to know implementation version names.
+A separate physical current table is optional and should be justified by performance evidence.
 
-### SLA and observability
+## Versioning and blue/green
 
-SLA is per dataset and can be stage-specific. Latency and freshness are separate metrics. Cadence may be continuous, interval or scheduled-deadline.
+The initial dataset implementation is v1. A candidate version is created explicitly under:
 
-Domain-local run ledgers feed a materialized `DATASET_HEALTH` surface and incident lifecycle. Snowflake system history is useful for audit/enrichment but is not the only low-latency health source.
+```text
+silver_processing/<source>/<dataset>/versions/v2/
+```
 
-### Repair
+Every version gets independent physical objects, Stream/Task where appropriate, apply procedure, replay procedure and validation SQL. Creating v2 changes zero bytes in v1.
+
+Candidate lifecycle:
+
+```text
+scaffold -> deploy -> replay/bootstrap -> catch up -> shadow -> validate -> compare -> release SQL -> explicit cutover
+```
+
+`025_compare.sql` compares the stable active published relation with the candidate and records generic evidence in `CONTROL.VERSION_VALIDATION`.
+
+`release-sql` generates `activate.sql` and `rollback.sql` for review. `esf` never executes those files.
+
+## SLA and observability
+
+SLA is per logical dataset and may be stage-specific. Latency and freshness are separate metrics. Cadence can be continuous, interval or scheduled-deadline. Domain run ledgers feed `CONTROL.DATASET_HEALTH` and dashboard-ready views.
+
+## Repair
 
 Repair begins at the latest correct layer:
 
@@ -69,7 +119,7 @@ Repair begins at the latest correct layer:
 
 Replay, backfill and reset remain distinct operations.
 
-The first repair automation will generate a repair plan and explicit repair SQL/scripts for engineer review/execution. It will not autonomously execute production repair.
+`repair-plan` is read-only. `repair-sql` currently generates explicit SCD2 candidate replay SQL for engineer review/execution and does not modify active production objects.
 
 ## Gold / KPI / Semantic
 
@@ -84,7 +134,8 @@ Continue to reject:
 - metadata -> runtime transformation SQL generation
 - central generic SCD runtime engines
 - universal ingestion orchestration
-- automatic connector state management when mature connectors already own it
-- automatic business Mart/KPI/semantic generation
+- hidden active-version switching
+- automatic production repair execution
+- automatic business Mart/KPI/Semantic generation
 
 The control plane may centralize operational health/version/incident logic inside a domain, but must not hide dataset transformation behavior.

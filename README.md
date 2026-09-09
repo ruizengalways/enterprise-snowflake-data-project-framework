@@ -1,38 +1,49 @@
 # Enterprise Snowflake Data Project Toolkit
 
-This repository is intentionally **not a data runtime framework**.
+This repository is intentionally **not a universal data runtime framework**.
 
-Its responsibility is simple:
+Its responsibility is:
 
 ```text
 Framework owns project creation and reusable operating patterns.
 Domain repositories own project evolution and production transformation code.
 ```
 
-The toolkit creates readable project/source/dataset starters, validates contracts, provides domain-local operational-control foundations, and supplies reusable CI/CD guardrails. Generated SQL is ordinary source code committed to the domain repository. Deployment executes committed source; it never regenerates business SQL from metadata.
+The toolkit creates readable project/source/dataset starters, validates contracts, provides domain-local operational-control foundations, and supplies reusable CI/CD guardrails. Generated SQL is normal source code committed to the domain repository. Deployment executes committed source; it does not regenerate production transformation SQL from metadata.
 
 ## Architecture boundary
 
 ```text
 Source
-  -> Ingestion
+  -> source-specific ingestion
   -> BRONZE
   -> Stream / readiness signal
   -> dataset-local Task
-  -> explicit domain-owned Snowflake SQL / procedure
+  -> dataset-local SQL / SQL procedure
   -> SILVER
-  -> dbt starts here
-  -> GOLD
-  -> SEMANTIC
+  -> dbt starts from trusted Silver
+  -> GOLD / Mart
+  -> Semantic / KPI
 ```
 
-**dbt starts from trusted Silver.** Ingestion remains source-specific. SQL Server CDC, Kafka, REST APIs, Snowpipe, Snowpipe Streaming, Openflow, ADF, Talend, custom Python and files can all coexist without a shared ingestion runtime DSL.
+Ingestion remains source-specific. Openflow, Snowpipe, Kafka connectors, Talend/ADF/Informatica, REST API code and scheduled loads can coexist. Source profiling/discovery is deliberately outside this framework.
 
-Source profiling/discovery is deliberately outside this framework and can be handled by a separate analysis toolkit.
+## One domain repo, many sources
 
-## Source system is the durable organization boundary
+A domain is a repository and a Snowflake database boundary. Run `esf init-project` inside the domain repo.
 
-A domain can contain many sources. Keep contracts, ingestion assets and Silver processing grouped by source system:
+```text
+enterprise-snowflake-transport-analytics/
+├── config/sources/
+├── contracts/raw/
+├── ingestion/
+├── silver_processing/
+├── control_plane/
+├── dbt/
+└── operations/
+```
+
+A domain can contain many source systems. Source is a durable organization boundary:
 
 ```text
 config/sources/fleet_mssql.yml
@@ -41,13 +52,21 @@ ingestion/fleet_mssql/
 silver_processing/fleet_mssql/customer/
 ```
 
-Do not organize long-lived source code around `batch_1`, `wave_2`, or similar rollout labels.
+New generated Snowflake object names also preserve the source boundary. For example `fleet_mssql.customer` defaults to:
+
+```text
+BRONZE.FLEET_MSSQL_CUSTOMER
+SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY
+SILVER.FLEET_MSSQL_CUSTOMER_CURRENT
+```
+
+This avoids collisions when two sources in one domain both contain a `customer` dataset. Existing domain-owned pipelines are never renamed automatically.
 
 ## Domain-local control plane
 
-Each domain owns its own `CONTROL` schema in its domain database context. Do not use one shared writable `PLATFORM_CONTROL` runtime database for every domain.
+Each domain owns its own `CONTROL` schema. Do not put all domains into one shared writable control database.
 
-`esf init-project` now creates a committed control-plane skeleton:
+`esf init-project` creates committed control-plane source:
 
 ```text
 control_plane/
@@ -59,13 +78,24 @@ control_plane/
     └── 020_refresh_health.sql
 ```
 
-The first control-plane contract includes logical dataset/version state, SLA policy, ingestion/Silver/dbt run ledgers, current dataset health, incidents, version validation and repair audit.
+The current model includes:
 
-Cross-domain health is read-only aggregation of each domain's stable `CONTROL.DATASET_HEALTH_V`. The enterprise dashboard layer is not a runtime dependency for domain pipelines.
+```text
+DATASET
+DATASET_VERSION
+SLA_POLICY
+INGESTION_RUN
+PIPELINE_RUN
+DBT_RUN
+DATASET_HEALTH
+INCIDENT
+REPAIR_RUN
+VERSION_VALIDATION
+```
+
+Cross-domain health is read-only aggregation of each domain's stable health view. A domain can be maintained or decommissioned independently.
 
 ## CLI
-
-Install the Python package and use one CLI:
 
 ```bash
 python -m pip install .
@@ -73,74 +103,115 @@ python -m pip install .
 esf init-project --project-root .
 esf add-source fleet_mssql --project-root .
 esf plan --source fleet_mssql --project-root .
+esf scaffold-preview customer --source fleet_mssql --project-root .
 esf scaffold scd2 customer --source fleet_mssql --project-root .
 esf scaffold-all --source fleet_mssql --project-root .
+
+esf scaffold-version customer v2 --source fleet_mssql --project-root .
+esf repair-plan customer --source fleet_mssql --problem silver --project-root .
+esf repair-sql customer v2 --source fleet_mssql --from "2026-09-01 00:00:00" --project-root .
+esf release-sql customer --source fleet_mssql --from-version v1 --to-version v2 --project-root .
+
 esf validate --project-root .
 ```
 
-There is deliberately **no `--force`** for scaffolding.
+There is deliberately **no `--force`**.
 
-## Append-only scaffolding ownership
-
-The critical rule is:
+## Ownership rule
 
 ```text
 NOT EXISTS
     -> scaffold
-DOMAIN OWNED
+EXISTS
     -> DOMAIN OWNED FOREVER
 ```
 
-Once `silver_processing/<source>/<dataset>/` exists, Framework scaffold commands never write into that directory again. This remains true even when a standard starter file is missing. `plan`/`scaffold-all` report the directory as domain-owned and warn about incomplete starter layout, but change zero bytes.
+Once `silver_processing/<source>/<dataset>/` exists, normal scaffold commands change zero bytes inside it. A candidate version is a separate ownership unit under `versions/vN/`; if that version directory exists, `scaffold-version` changes zero bytes there as well. Generated repair/release directories use the same rule.
 
-The same non-destructive rule applies to project-level control-plane files created by `init-project`: existing files are never overwritten on rerun.
+## New dataset implementation layout
 
-## Source manifests are creation inputs, not runtime DSL
+A new dataset starter now contains executable Snowflake source-code skeletons rather than only comments:
 
-A source manifest is intentionally small:
-
-```yaml
-schema_version: 1
-source:
-  id: fleet_mssql
-  owner: transport
-
-datasets:
-  customer:
-    pattern: scd2
-    raw_contract: contracts/raw/fleet_mssql/customer.yml
-  orders:
-    pattern: scd1
-    raw_contract: contracts/raw/fleet_mssql/orders.yml
+```text
+silver_processing/fleet_mssql/customer/
+├── README.md
+├── pipeline.yml
+├── version.yml
+├── 001_objects.sql
+├── 010_apply.sql
+├── 015_replay.sql
+├── 020_validate.sql
+├── 025_compare.sql
+├── 030_task.sql
+├── 040_register.sql
+├── 050_publish.sql
+└── deploy_manifest.fragment.txt
 ```
 
-Supported starter patterns are `append`, `full_refresh`, `scd1`, `scd2`, and `custom`.
-
-Source manifests do not define connector offsets or hidden runtime SQL generation.
-
-## Slim Silver pipeline metadata
-
-RAW contracts own evidence semantics such as business key, ordering columns, idempotency key, source timestamp and delete semantics. Silver pipeline metadata does not repeat those values.
-
-The framework uses RAW evidence at scaffold/validation time and keeps production transformation implementation explicit in committed SQL.
+For standard patterns, this generates version-local physical objects, a Stream where appropriate, a SQL procedure, a Task, control-plane registration and stable published views. The generated code is intended to be read and changed by domain engineers.
 
 ## SCD2 default
 
-The default SCD2 physical model is one history table containing all historical versions. Current-state access is the active-row predicate, normally:
+The default SCD2 implementation keeps complete history in one physical history table. Current state is represented by:
 
 ```sql
 WHERE IS_ACTIVE = TRUE
 ```
 
-A stable current view can be exposed for convenience. A separately materialized current table is optional and should be justified by project performance needs.
+Each version has its own physical history and current view:
 
-Dataset implementations can evolve through active/candidate versions. Candidate versions are built and validated in parallel before lightweight cutover; consumers continue to use stable published Silver names.
+```text
+SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY
+SILVER.FLEET_MSSQL_CUSTOMER_V1_CURRENT
 
-## SLA, health and repair
+SILVER.FLEET_MSSQL_CUSTOMER_V2_HISTORY
+SILVER.FLEET_MSSQL_CUSTOMER_V2_CURRENT
+```
 
-Each logical dataset can have stage-specific SLA policy covering Source -> Bronze, Bronze -> Silver, Silver -> Gold and end-to-end freshness. Latency and freshness are separate metrics, and cadence can be continuous, interval-based or scheduled-deadline.
+Consumers use stable published objects:
 
-Domain run ledgers feed `CONTROL.DATASET_HEALTH` and dashboard-ready views. Repair follows the latest-known-good-layer rule:
+```text
+SILVER.FLEET_MSSQL_CUSTOMER_HISTORY
+SILVER.FLEET_MSSQL_CUSTOMER_CURRENT
+```
+
+A separately materialized current table is optional when performance evidence justifies it.
+
+## Stream + Task + procedure
+
+For append/SCD1/SCD2 starters, every implementation version owns an independent Stream and Task. This allows active and candidate versions to consume the same Bronze source independently.
+
+```text
+BRONZE
+  ├── V1 Stream -> V1 Task -> V1 procedure -> V1 Silver
+  └── V2 Stream -> V2 Task -> V2 procedure -> V2 Silver
+```
+
+Tasks are created suspended by Snowflake. Candidate tasks remain unpublished until engineers bootstrap/replay, catch up, compare, validate and explicitly activate them. Full-refresh/custom pipelines do not pretend that one readiness model fits every source; engineers wire schedule/AFTER/control-event logic explicitly.
+
+## Candidate and blue/green workflow
+
+```text
+v1 ACTIVE
+  -> scaffold-version v2
+  -> deploy candidate objects
+  -> historical replay/bootstrap
+  -> catch up
+  -> shadow
+  -> 020_validate.sql
+  -> 025_compare.sql
+  -> VERSION_VALIDATION evidence
+  -> release-sql
+  -> engineer reviews activate.sql / rollback.sql
+```
+
+`025_compare.sql` compares the stable active published relation with the candidate implementation and writes generic evidence such as row count, business-key coverage and candidate key uniqueness into `CONTROL.VERSION_VALIDATION`. Domain-specific validation can be added directly to the file.
+
+`release-sql` only generates files. It does not connect to Snowflake and never performs cutover itself.
+
+## Repair
+
+Repair starts from the latest known-good layer:
 
 ```text
 Gold wrong / Silver correct   -> rebuild dbt descendants
@@ -148,25 +219,24 @@ Silver wrong / Bronze correct -> candidate version + replay
 Bronze wrong                  -> repair ingestion, then replay downstream
 ```
 
-Replay, backfill and reset are separate operations. The first repair automation direction is to generate explicit reviewable SQL/scripts for engineers to execute, not an autonomous production repair engine.
+`repair-plan` is read-only. The first `repair-sql` implementation supports SCD2 candidate replay and writes explicit SQL under `operations/replay/`. Engineers review and run that SQL themselves. Active production objects are not modified by the generated replay script.
+
+Replay, backfill and reset remain separate concepts.
+
+## SLA and health
+
+Each logical dataset can have stage-specific SLA policy. Latency and freshness are separate metrics. Cadence can be continuous, interval-based or scheduled-deadline. Domain run ledgers feed `CONTROL.DATASET_HEALTH` and dashboard-ready views.
+
+The control plane may centralize operational health/version/incident logic inside a domain, but it must not become a hidden business transformation engine.
 
 ## dbt and deployment
 
-Silver processing and dbt stay in the same domain repository so one Git SHA represents one domain release. `init-project` creates only a dbt skeleton (`models/sources`, `models/marts`, `models/semantic`, `tests`); it does not generate marts, KPIs, or semantic business logic.
+Silver processing and dbt remain in the same domain repo so one Git SHA identifies one domain release. dbt starts from trusted Silver. The framework keeps Mart/KPI/Semantic as exploratory domain work; it provides skeletons/examples rather than auto-generating business logic.
 
-A domain repository owns two committed manifests when it adopts the control plane:
-
-```text
-control_plane/deploy_manifest.txt
-silver_processing/deploy_manifest.txt
-```
-
-The reusable deployment workflow validates contracts, applies committed domain control-plane SQL first, then committed Silver SQL, then runs dbt for Gold/Semantic. Existing repositories without a control-plane manifest are migrated gradually and are not forced into deployment-time scaffolding.
+The reusable deployment workflow executes committed control-plane SQL first, then committed Silver SQL, then dbt. Scaffolding never occurs during deployment.
 
 ## Deliberately absent
 
-The toolkit does not contain a universal source-discovery engine, universal ingestion orchestrator, central generic SCD runtime engine, runtime metadata routing, metadata-to-runtime transformation SQL generation, deployment-time scaffolding, automatic business Mart/KPI/semantic generation, or connector-state engines for technologies that already own their checkpoint state.
+The toolkit does not contain a universal source-discovery engine, universal ingestion orchestrator, central generic SCD runtime engine, runtime metadata routing, metadata-to-runtime transformation SQL generation, deployment-time scaffolding, automatic business Mart/KPI/Semantic generation, or connector-state engines for mature connectors that already own their checkpoint state.
 
-Domain-local control procedures are allowed for operational concerns such as health/SLA evaluation, incident lifecycle, run logging and version state management. Those procedures must not become hidden business transformation engines.
-
-Live Snowflake/WIF acceptance remains a separate integration stage until a configured DEV environment is available.
+Live Snowflake/WIF acceptance remains a separate integration gate until a configured DEV Snowflake environment is available.

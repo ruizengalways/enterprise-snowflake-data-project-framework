@@ -5,9 +5,16 @@ from pathlib import Path
 
 from .init_project import initialize_project
 from .plan import SourcePlan, build_source_plan
-from .scaffold import SUPPORTED_PATTERNS, scaffold_all, scaffold_pipeline
+from .repair import PROBLEM_LAYERS, build_repair_plan, generate_silver_repair_scripts
+from .scaffold import (
+    SUPPORTED_PATTERNS,
+    scaffold_all,
+    scaffold_pipeline,
+    scaffold_preview,
+)
 from .source_management import add_source
 from .validation import validate_project_tree
+from .versioning import generate_release_scripts, scaffold_version
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -20,10 +27,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    init_project = subparsers.add_parser("init-project", help="Initialize a domain repository without overwriting existing files.")
+    init_project = subparsers.add_parser(
+        "init-project", help="Initialize a domain repository without overwriting existing files."
+    )
     init_project.add_argument("--project-root", type=Path, default=Path.cwd())
 
-    add_source_parser = subparsers.add_parser("add-source", help="Add one source-system boundary to an initialized project.")
+    add_source_parser = subparsers.add_parser(
+        "add-source", help="Add one source-system boundary to an initialized project."
+    )
     add_source_parser.add_argument("source_id")
     add_source_parser.add_argument("--project-root", type=Path, default=Path.cwd())
 
@@ -31,15 +42,67 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--source", required=True, dest="source_id")
     plan.add_argument("--project-root", type=Path, default=Path.cwd())
 
-    scaffold = subparsers.add_parser("scaffold", help="Create one new domain-owned Silver dataset directory.")
+    preview = subparsers.add_parser(
+        "scaffold-preview", help="Render a new dataset starter in memory without writing files."
+    )
+    preview.add_argument("dataset_id")
+    preview.add_argument("--source", required=True, dest="source_id")
+    preview.add_argument("--show-content", action="store_true")
+    preview.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    scaffold = subparsers.add_parser(
+        "scaffold", help="Create one new domain-owned Silver dataset directory."
+    )
     scaffold.add_argument("pattern", choices=sorted(SUPPORTED_PATTERNS))
     scaffold.add_argument("dataset_id")
     scaffold.add_argument("--source", required=True, dest="source_id")
     scaffold.add_argument("--project-root", type=Path, default=Path.cwd())
 
-    scaffold_all_parser = subparsers.add_parser("scaffold-all", help="Create only missing dataset directories declared by one source manifest.")
+    scaffold_all_parser = subparsers.add_parser(
+        "scaffold-all", help="Create only missing dataset directories declared by one source manifest."
+    )
     scaffold_all_parser.add_argument("--source", required=True, dest="source_id")
     scaffold_all_parser.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    scaffold_version_parser = subparsers.add_parser(
+        "scaffold-version",
+        help="Create a new candidate implementation under an existing dataset without modifying active code.",
+    )
+    scaffold_version_parser.add_argument("dataset_id")
+    scaffold_version_parser.add_argument("version")
+    scaffold_version_parser.add_argument("--source", required=True, dest="source_id")
+    scaffold_version_parser.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    repair_plan = subparsers.add_parser(
+        "repair-plan", help="Explain the repair path without writing files or executing Snowflake SQL."
+    )
+    repair_plan.add_argument("dataset_id")
+    repair_plan.add_argument("--source", required=True, dest="source_id")
+    repair_plan.add_argument("--problem", required=True, choices=sorted(PROBLEM_LAYERS))
+    repair_plan.add_argument("--from", dest="requested_from")
+    repair_plan.add_argument("--to", dest="requested_to")
+    repair_plan.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    repair_sql = subparsers.add_parser(
+        "repair-sql", help="Generate explicit candidate replay SQL for engineer review; never execute it."
+    )
+    repair_sql.add_argument("dataset_id")
+    repair_sql.add_argument("version")
+    repair_sql.add_argument("--source", required=True, dest="source_id")
+    repair_sql.add_argument("--from", dest="requested_from")
+    repair_sql.add_argument("--to", dest="requested_to")
+    repair_sql.add_argument("--output-root", type=Path)
+    repair_sql.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    release_sql = subparsers.add_parser(
+        "release-sql", help="Generate explicit activate/rollback SQL; never execute it."
+    )
+    release_sql.add_argument("dataset_id")
+    release_sql.add_argument("--source", required=True, dest="source_id")
+    release_sql.add_argument("--from-version", required=True)
+    release_sql.add_argument("--to-version", required=True)
+    release_sql.add_argument("--output-root", type=Path)
+    release_sql.add_argument("--project-root", type=Path, default=Path.cwd())
 
     validate = subparsers.add_parser("validate", help="Validate project, source, RAW, and Silver contracts.")
     validate.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -58,19 +121,16 @@ def _print_plan(plan: SourcePlan) -> None:
         print(f"  {item.dataset_id:<24} {item.pattern}")
         if item.missing_standard_files:
             missing = ", ".join(item.missing_standard_files)
-            print(f"    WARNING: existing dataset directory does not match standard scaffold layout; missing: {missing}. No files changed.")
-    if plan.existing:
-        print(f"  {len(plan.existing)} total")
-    else:
-        print("  0")
+            print(
+                "    WARNING: existing dataset directory does not match standard scaffold layout; "
+                f"missing: {missing}. No files changed."
+            )
+    print(f"  {len(plan.existing)} total" if plan.existing else "  0")
     print()
     print("WILL CREATE")
     for item in plan.new:
         print(f"  {item.dataset_id:<24} {item.pattern}")
-    if plan.new:
-        print(f"  {len(plan.new)} total")
-    else:
-        print("  0")
+    print(f"  {len(plan.new)} total" if plan.new else "  0")
     print()
     print("WILL OVERWRITE")
     print("  0")
@@ -88,14 +148,38 @@ def main() -> None:
 
         if args.command == "add-source":
             result = add_source(args.project_root, args.source_id)
-            if result.created:
-                print(f"Added source: {result.source_id}")
-            else:
-                print(f"Source already exists: {result.source_id}. No files changed.")
+            print(
+                f"Added source: {result.source_id}"
+                if result.created
+                else f"Source already exists: {result.source_id}. No files changed."
+            )
             return
 
         if args.command == "plan":
             _print_plan(build_source_plan(args.project_root, args.source_id))
+            return
+
+        if args.command == "scaffold-preview":
+            result = scaffold_preview(
+                project_root=args.project_root,
+                source_id=args.source_id,
+                dataset_id=args.dataset_id,
+            )
+            print(f"Dataset: {result.source_id}.{result.dataset_id}")
+            print(f"Destination: {result.destination}")
+            if result.domain_owned:
+                print("DOMAIN OWNED: existing directory will not be modified.")
+                print("WILL CREATE: 0")
+                print("WILL OVERWRITE: 0")
+                return
+            print(f"WILL CREATE: {len(result.files)}")
+            for filename in result.files:
+                print(f"  {filename}")
+            print("WILL OVERWRITE: 0")
+            if args.show_content:
+                for filename in result.files:
+                    print(f"\n===== {filename} =====")
+                    print(result.rendered[filename], end="")
             return
 
         if args.command == "scaffold":
@@ -121,9 +205,66 @@ def main() -> None:
             print(f"Overwritten: {result.overwritten}")
             for item in result.skipped:
                 if item.missing_standard_files:
-                    print(
-                        f"WARNING: {item.destination} does not match standard scaffold layout. No files changed."
-                    )
+                    print(f"WARNING: {item.destination} does not match standard scaffold layout. No files changed.")
+            return
+
+        if args.command == "scaffold-version":
+            result = scaffold_version(
+                project_root=args.project_root,
+                source_id=args.source_id,
+                dataset_id=args.dataset_id,
+                version=args.version,
+            )
+            print(
+                f"Created candidate: {result.destination}"
+                if result.created
+                else f"SKIPPED / VERSION OWNED: {result.destination}. No files changed."
+            )
+            return
+
+        if args.command == "repair-plan":
+            result = build_repair_plan(
+                project_root=args.project_root,
+                source_id=args.source_id,
+                dataset_id=args.dataset_id,
+                problem=args.problem,
+                requested_from=args.requested_from,
+                requested_to=args.requested_to,
+            )
+            print(result.render(), end="")
+            return
+
+        if args.command == "repair-sql":
+            result = generate_silver_repair_scripts(
+                project_root=args.project_root,
+                source_id=args.source_id,
+                dataset_id=args.dataset_id,
+                candidate_version=args.version,
+                requested_from=args.requested_from,
+                requested_to=args.requested_to,
+                output_root=args.output_root,
+            )
+            print(
+                f"Generated repair scripts: {result.destination}"
+                if result.created
+                else f"SKIPPED / REPAIR OWNED: {result.destination}. No files changed."
+            )
+            return
+
+        if args.command == "release-sql":
+            result = generate_release_scripts(
+                project_root=args.project_root,
+                source_id=args.source_id,
+                dataset_id=args.dataset_id,
+                from_version=args.from_version,
+                to_version=args.to_version,
+                output_root=args.output_root,
+            )
+            print(
+                f"Generated release scripts: {result.destination}"
+                if result.created
+                else f"SKIPPED / RELEASE OWNED: {result.destination}. No files changed."
+            )
             return
 
         errors = validate_project_tree(args.project_root)
