@@ -39,7 +39,7 @@ def resolve_dbt_target(
     *,
     developer: str | None = None,
     pr_number: int | None = None,
-    default_schema: str = "STAGING",
+    default_schema: str = "SILVER_STAGING",
 ) -> DbtTarget:
     """Resolve canonical physical Snowflake targets without hard-coding them in model SQL."""
     code = validate_identifier(project_code, label="project code")

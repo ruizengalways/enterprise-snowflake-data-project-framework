@@ -1,48 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://enterprise-snowflake.example/schemas/raw_contract.schema.json",
-  "title": "Enterprise Snowflake RAW Contract",
+  "title": "Enterprise Snowflake RAW Contract v2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "contract"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "contract": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "source_system",
-        "entity",
-        "grain",
-        "business_key",
-        "columns",
-        "change_semantics",
-        "breaking_change_policy"
-      ],
+      "required": ["source_system", "entity", "grain", "business_key", "columns", "change_semantics", "capture_fidelity", "idempotency_key", "breaking_change_policy"],
       "properties": {
-        "source_system": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_]{1,63}$"
-        },
-        "entity": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_]{1,63}$"
-        },
-        "grain": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "business_key": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
-        },
-        "source_timestamp": {
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-        },
+        "source_system": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$"},
+        "entity": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$"},
+        "grain": {"type": "string", "minLength": 1, "maxLength": 256},
+        "business_key": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
+        "source_timestamp": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
         "columns": {
           "type": "array",
           "minItems": 1,
@@ -54,9 +28,7 @@
               "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
               "type": {"type": "string", "minLength": 1, "maxLength": 128},
               "nullable": {"type": "boolean"},
-              "classification": {
-                "enum": ["public", "internal", "confidential", "restricted"]
-              }
+              "classification": {"enum": ["public", "internal", "confidential", "restricted"]}
             }
           }
         },
@@ -66,84 +38,22 @@
           "required": ["mode"],
           "properties": {
             "mode": {"enum": ["snapshot", "append", "cdc"]},
-            "operation_column": {
-              "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-            },
-            "sequence_column": {
-              "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-            },
-            "delete_semantics": {
-              "enum": [
-                "none",
-                "hard_delete",
-                "tombstone",
-                "inferred_snapshot_diff",
-                "source_defined"
-              ]
+            "operation_column": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+            "sequence_column": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+            "delete_semantics": {"enum": ["none", "hard_delete", "tombstone", "inferred_snapshot_diff", "source_defined"]},
+            "delete_values": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 64}}
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"delete_semantics": {"const": "tombstone"}}, "required": ["delete_semantics"]},
+              "then": {"required": ["operation_column", "delete_values"]}
             }
-          }
+          ]
         },
-        "capture": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["archetype", "fidelity", "checkpoint_kind"],
-          "properties": {
-            "archetype": {
-              "enum": [
-                "snapshot",
-                "watermark",
-                "net_change",
-                "full_change",
-                "snapshot_diff",
-                "cursor_or_file"
-              ]
-            },
-            "fidelity": {
-              "enum": ["current_state", "net_change", "full_change", "full_event"]
-            },
-            "checkpoint_kind": {
-              "enum": [
-                "none",
-                "watermark",
-                "cursor",
-                "source_position",
-                "event_offset",
-                "snapshot_id",
-                "file_identity"
-              ]
-            },
-            "lookback_minutes": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "ordering_columns": {
-              "type": "array",
-              "minItems": 1,
-              "uniqueItems": true,
-              "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
-            },
-            "idempotency_columns": {
-              "type": "array",
-              "minItems": 1,
-              "uniqueItems": true,
-              "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
-            }
-          }
-        },
-        "cadence": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "retention_days": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "breaking_change_policy": {
-          "enum": ["reject", "versioned_contract", "approved_migration"]
-        }
+        "capture_fidelity": {"enum": ["current_state", "net_change", "full_change", "full_event"]},
+        "ordering_columns": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
+        "idempotency_key": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
+        "breaking_change_policy": {"enum": ["reject", "versioned_contract", "approved_migration"]}
       }
     }
   }

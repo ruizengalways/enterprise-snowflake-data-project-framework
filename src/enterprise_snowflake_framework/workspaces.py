@@ -3,7 +3,15 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-STANDARD_LAYERS = ("STAGING", "INTERMEDIATE", "CANONICAL", "MARTS", "SEMANTIC")
+STANDARD_LAYERS = (
+    "BRONZE",
+    "SILVER_STAGING",
+    "SILVER_INTERMEDIATE",
+    "SILVER_CANONICAL",
+    "GOLD_MARTS",
+    "GOLD_SEMANTIC",
+    "DQ",
+)
 _IDENTIFIER_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _TOKEN_RE = re.compile(r"[^A-Z0-9]+")
 _MAX_IDENTIFIER_LENGTH = 255

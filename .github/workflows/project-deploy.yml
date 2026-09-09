@@ -37,7 +37,7 @@ jobs:
 
     env:
       DBT_AUTHENTICATOR: workload_identity
-      DBT_DEFAULT_SCHEMA: STAGING
+      DBT_DEFAULT_SCHEMA: SILVER_STAGING
       ESF_ENVIRONMENT: ${{ inputs.environment }}
 
     steps:
@@ -142,8 +142,25 @@ jobs:
           cache: pip
           cache-dependency-path: framework/requirements-dbt.txt
 
-      - name: Install pinned dbt toolchain
-        run: python -m pip install -r framework/requirements-dbt.txt
+      - name: Install pinned dbt toolchain and framework
+        run: |
+          python -m pip install -r framework/requirements-dbt.txt
+          python -m pip install ./framework
+
+      - name: Render validated deployment context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python framework/scripts/render_dbt_context.py \
+            --project-root project \
+            --schema-dir framework/project_schema \
+            --project-code "${{ inputs.project_code }}" \
+            --environment "${{ inputs.environment }}" \
+            --workload transform \
+            --run-id "${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" \
+            --git-sha "${{ inputs.git_sha }}" \
+            --env-file "${GITHUB_ENV}" \
+            --vars-file "${RUNNER_TEMP}/esf-dbt-vars.json"
 
       - name: Request account-scoped GitHub OIDC token
         shell: bash
@@ -159,8 +176,6 @@ jobs:
           echo "SNOWFLAKE_TOKEN=${token}" >> "${GITHUB_ENV}"
           echo "SNOWFLAKE_USER=SU_GITHUB_${{ inputs.project_code }}_DEPLOY" >> "${GITHUB_ENV}"
           echo "DBT_ROLE=AR_${{ inputs.project_code }}_DEPLOY" >> "${GITHUB_ENV}"
-          echo "DBT_DATABASE=$(printf '%s_%s' '${{ inputs.environment }}' '${{ inputs.project_code }}' | tr '[:lower:]' '[:upper:]')" >> "${GITHUB_ENV}"
-          echo "DBT_WAREHOUSE=WH_${{ inputs.project_code }}_TRANSFORM" >> "${GITHUB_ENV}"
 
       - name: Resolve dbt dependencies
         run: |
@@ -179,5 +194,15 @@ jobs:
         run: |
           dbt build \
             --target "${{ inputs.environment }}" \
+            --vars "$(cat "${RUNNER_TEMP}/esf-dbt-vars.json")" \
+            --project-dir "project/${{ inputs.project_dir }}" \
+            --profiles-dir "project/${{ inputs.project_dir }}"
+
+      - name: Register deployed dataset configuration snapshots
+        run: |
+          dbt run-operation esf_register_all_dataset_config_snapshots \
+            --target "${{ inputs.environment }}" \
+            --args '{"project_code": "${{ inputs.project_code }}", "git_sha": "${{ inputs.git_sha }}"}' \
+            --vars "$(cat "${RUNNER_TEMP}/esf-dbt-vars.json")" \
             --project-dir "project/${{ inputs.project_dir }}" \
             --profiles-dir "project/${{ inputs.project_dir }}"

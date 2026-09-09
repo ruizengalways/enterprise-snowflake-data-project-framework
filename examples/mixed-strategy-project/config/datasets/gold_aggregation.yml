@@ -1,0 +1,13 @@
+schema_version: 2
+
+dataset:
+  id: gold_aggregation
+  owner_team: example-data
+  materialization:
+    type: dynamic_table
+    target_lag: 5 minutes
+    refresh_mode: adaptive
+  runtime:
+    mode: snowflake_managed
+  compute:
+    workload: transform

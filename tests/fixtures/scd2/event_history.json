@@ -1,0 +1,27 @@
+{
+  "business_key": ["entity_id"],
+  "effective_at_column": "effective_at",
+  "order_columns": ["effective_at", "source_sequence"],
+  "tracked_columns": ["status"],
+  "operation_column": "source_operation",
+  "delete_values": ["D"],
+  "events": [
+    {"entity_id": "A", "status": "alpha-v1", "effective_at": 10, "source_sequence": 1, "source_operation": "I"},
+    {"entity_id": "A", "status": "alpha-v1", "effective_at": 10, "source_sequence": 1, "source_operation": "I"},
+    {"entity_id": "A", "status": "alpha-v3", "effective_at": 30, "source_sequence": 3, "source_operation": "U"},
+    {"entity_id": "A", "status": "alpha-v2", "effective_at": 20, "source_sequence": 2, "source_operation": "U"},
+    {"entity_id": "A", "status": "alpha-v3", "effective_at": 40, "source_sequence": 4, "source_operation": "D"},
+    {"entity_id": "A", "status": "alpha-v3", "effective_at": 50, "source_sequence": 5, "source_operation": "I"},
+    {"entity_id": "B", "status": "bravo-v1", "effective_at": 5, "source_sequence": 1, "source_operation": "I"},
+    {"entity_id": "B", "status": "bravo-v1", "effective_at": 15, "source_sequence": 2, "source_operation": "U"},
+    {"entity_id": "B", "status": "bravo-v2", "effective_at": 25, "source_sequence": 3, "source_operation": "U"}
+  ],
+  "expected_history": [
+    {"entity_id": "A", "status": "alpha-v1", "valid_from": 10, "valid_to": 20, "is_current": false, "version_ordinal": 1},
+    {"entity_id": "A", "status": "alpha-v2", "valid_from": 20, "valid_to": 30, "is_current": false, "version_ordinal": 2},
+    {"entity_id": "A", "status": "alpha-v3", "valid_from": 30, "valid_to": 40, "is_current": false, "version_ordinal": 3},
+    {"entity_id": "A", "status": "alpha-v3", "valid_from": 50, "valid_to": null, "is_current": true, "version_ordinal": 5},
+    {"entity_id": "B", "status": "bravo-v1", "valid_from": 5, "valid_to": 25, "is_current": false, "version_ordinal": 1},
+    {"entity_id": "B", "status": "bravo-v2", "valid_from": 25, "valid_to": null, "is_current": true, "version_ordinal": 2}
+  ]
+}

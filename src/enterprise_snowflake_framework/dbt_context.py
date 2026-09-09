@@ -35,7 +35,7 @@ def build_dbt_execution_context(
     pr_number: int | None = None,
     run_id: str | None = None,
     git_sha: str | None = None,
-    default_schema: str = "STAGING",
+    default_schema: str = "SILVER_STAGING",
 ) -> DbtExecutionContext:
     """Resolve physical targets, run query tag and validated dbt vars together."""
     target = resolve_dbt_target(

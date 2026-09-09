@@ -13,19 +13,28 @@ class TargetResolverTests(unittest.TestCase):
     def test_shared_dev_target_has_no_prefix(self) -> None:
         target = resolve_dbt_target("HEALTH", "dev", "transform")
         self.assertEqual(target.schema_prefix, "")
-        self.assertEqual(target.default_schema, "STAGING")
+        self.assertEqual(target.default_schema, "SILVER_STAGING")
 
     def test_pr_ci_target(self) -> None:
         target = resolve_dbt_target("TRANSPORT", "ci", "ci", pr_number=123)
         self.assertEqual(target.database, "CI_TRANSPORT")
         self.assertEqual(target.warehouse, "WH_TRANSPORT_CI")
         self.assertEqual(target.schema_prefix, "PR_123")
+        self.assertEqual(target.default_schema, "SILVER_STAGING")
 
     def test_uat_and_prod_use_stable_schema_names(self) -> None:
         for environment in ("uat", "prod"):
             target = resolve_dbt_target("HEALTH", environment, "query")
             self.assertEqual(target.schema_prefix, "")
             self.assertEqual(target.database, f"{environment.upper()}_HEALTH")
+
+    def test_custom_default_schema_must_be_standard_layer(self) -> None:
+        target = resolve_dbt_target(
+            "HEALTH", "dev", "transform", default_schema="silver_canonical"
+        )
+        self.assertEqual(target.default_schema, "SILVER_CANONICAL")
+        with self.assertRaises(ValueError):
+            resolve_dbt_target("HEALTH", "dev", "transform", default_schema="staging")
 
     def test_ci_requires_pr_number_and_ci_workload(self) -> None:
         with self.assertRaises(ValueError):
