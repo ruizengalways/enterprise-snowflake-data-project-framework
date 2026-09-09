@@ -9,6 +9,7 @@ KNOWN_CONTROL_SQL = (
     "control_plane/sql/020_refresh_health.sql",
     "control_plane/sql/030_sla_incident_lifecycle.sql",
     "control_plane/sql/040_health_task.sql",
+    "control_plane/sql/050_dataset_lifecycle_status.sql",
 )
 
 

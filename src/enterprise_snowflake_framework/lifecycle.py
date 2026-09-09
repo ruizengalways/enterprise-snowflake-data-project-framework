@@ -84,13 +84,17 @@ def generate_lifecycle_scripts(
         )
         task = _task_sql(action, names.task, pattern)
         enabled = "FALSE" if action == "pause" else "TRUE"
+        lifecycle_status = "PAUSED" if action == "pause" else "ACTIVE"
         sql = f"""-- {action.upper()} logical dataset {dataset_key} using explicit implementation {version}.
 -- Generated for review. `esf` does not execute this file.
+-- Requires CONTROL lifecycle migration 050_dataset_lifecycle_status.sql.
 -- If the domain changed task/orchestrator names after scaffolding, edit this script before execution.
 
 {task}
 UPDATE CONTROL.DATASET
-SET ENABLED = {enabled}, UPDATED_AT = CURRENT_TIMESTAMP()
+SET ENABLED = {enabled},
+    LIFECYCLE_STATUS = '{lifecycle_status}',
+    UPDATED_AT = CURRENT_TIMESTAMP()
 WHERE DATASET_ID = '{dataset_key}';
 
 -- Re-evaluate health after the approved lifecycle change.
@@ -126,6 +130,7 @@ For `resume`, confirm the selected version is the intended active implementation
                 suspends.append(f"ALTER TASK {names.task} SUSPEND;")
         sql = f"""-- SOFT DECOMMISSION logical dataset {dataset_key}.
 -- Generated for review. `esf` does not execute this file.
+-- Requires CONTROL lifecycle migration 050_dataset_lifecycle_status.sql.
 -- This intentionally does NOT DROP Silver history, published views, Bronze, or control-plane audit rows.
 -- Physical cleanup is a separate approved retention/governance action.
 
@@ -133,6 +138,7 @@ For `resume`, confirm the selected version is the intended active implementation
 
 UPDATE CONTROL.DATASET
 SET ENABLED = FALSE,
+    LIFECYCLE_STATUS = 'DECOMMISSIONED',
     CANDIDATE_VERSION = NULL,
     UPDATED_AT = CURRENT_TIMESTAMP()
 WHERE DATASET_ID = '{dataset_key}';
@@ -156,7 +162,7 @@ CALL CONTROL.EVALUATE_DOMAIN_HEALTH();
 
 Operation id: `{operation_id}`
 
-This is phase 1 of decommission only: stop processing and mark the logical dataset retired while preserving published data and audit evidence.
+This is phase 1 of decommission only: stop processing and mark the logical dataset `DECOMMISSIONED` while preserving published data and audit evidence.
 
 After the agreed retention/rollback window, perform physical cleanup in a separately reviewed change. Do not combine destructive cleanup with the initial decommission cutover.
 """

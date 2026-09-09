@@ -73,6 +73,7 @@ class SlaIncidentOperationTests(unittest.TestCase):
             "020_refresh_health.sql",
             "030_sla_incident_lifecycle.sql",
             "040_health_task.sql",
+            "050_dataset_lifecycle_status.sql",
         }
         actual = {path.name for path in (self.root / "control_plane" / "sql").glob("*.sql")}
         self.assertEqual(expected, actual)
@@ -89,7 +90,11 @@ class SlaIncidentOperationTests(unittest.TestCase):
             "control_plane/sql/020_refresh_health.sql\n"
         )
         manifest.write_text(old_manifest, encoding="utf-8")
-        for name in ("030_sla_incident_lifecycle.sql", "040_health_task.sql"):
+        for name in (
+            "030_sla_incident_lifecycle.sql",
+            "040_health_task.sql",
+            "050_dataset_lifecycle_status.sql",
+        ):
             (self.root / "control_plane" / "sql" / name).unlink()
 
         initialize_project(self.root)
@@ -101,10 +106,21 @@ class SlaIncidentOperationTests(unittest.TestCase):
             (
                 "control_plane/sql/030_sla_incident_lifecycle.sql",
                 "control_plane/sql/040_health_task.sql",
+                "control_plane/sql/050_dataset_lifecycle_status.sql",
             ),
             plan.missing_from_manifest,
         )
         self.assertFalse(plan.ready)
+
+    def test_lifecycle_status_migration_makes_dashboard_state_explicit(self) -> None:
+        sql = (
+            self.root / "control_plane" / "sql" / "050_dataset_lifecycle_status.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ADD COLUMN IF NOT EXISTS LIFECYCLE_STATUS", sql)
+        self.assertIn("THEN 'DECOMMISSIONED'", sql)
+        self.assertIn("H.HEALTH_REASON", sql)
+        self.assertIn("INCIDENT_KEY", sql)
+        self.assertIn("STAGE", sql)
 
     def test_sla_sql_is_reviewable_and_never_overwrites_revision(self) -> None:
         result = generate_sla_sql(

@@ -47,6 +47,7 @@ PROJECT_TEMPLATE_FILES = {
     "control_plane/sql/020_refresh_health.sql": "control_plane_020_refresh_health.sql",
     "control_plane/sql/030_sla_incident_lifecycle.sql": "control_plane_030_sla_incident_lifecycle.sql",
     "control_plane/sql/040_health_task.sql": "control_plane_040_health_task.sql",
+    "control_plane/sql/050_dataset_lifecycle_status.sql": "control_plane_050_dataset_lifecycle_status.sql",
     "dbt/dbt_project.yml": "dbt_project.yml",
     "dbt/profiles.yml": "profiles.yml",
     "silver_processing/deploy_manifest.txt": "deploy_manifest.txt",
