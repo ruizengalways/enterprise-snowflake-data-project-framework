@@ -1,0 +1,6 @@
+-- __DATASET_ID__: SCD1 apply procedure.
+-- Recommended readable shape:
+--   1. select the deterministic latest BRONZE.__ENTITY_UPPER__ row per business key;
+--   2. MERGE non-delete rows into the Silver current table;
+--   3. DELETE keys whose latest source event is a tombstone;
+--   4. keep the operation transactional when multiple statements must succeed together.

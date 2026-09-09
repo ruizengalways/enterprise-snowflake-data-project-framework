@@ -1,0 +1,25 @@
+version: 1
+pipeline:
+  id: order_status
+  pattern: scd2
+  raw_contract: contracts/raw/order_status.yml
+  input:
+    relation: BRONZE.ORDER_STATUS
+  output:
+    history: SILVER_CANONICAL.ORDER_STATUS_HISTORY
+    current: SILVER_CANONICAL.ORDER_STATUS_CURRENT
+  business_key:
+    - order_id
+  event_order:
+    - source_updated_at
+    - source_sequence
+  idempotency_key:
+    - order_id
+    - source_sequence
+  effective_at: source_updated_at
+  tracked_columns:
+    - status
+  delete:
+    column: source_operation
+    values:
+      - D

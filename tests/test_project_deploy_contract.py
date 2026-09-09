@@ -8,24 +8,27 @@ class ProjectDeployContractTests(unittest.TestCase):
             Path(__file__).resolve().parents[1] / ".github" / "workflows" / "project-deploy.yml"
         ).read_text(encoding="utf-8")
 
-    def test_deploy_uses_medallion_default_and_validated_context(self) -> None:
-        self.assertIn("DBT_DEFAULT_SCHEMA: SILVER_STAGING", self.workflow)
-        self.assertIn("Render validated deployment context", self.workflow)
-        self.assertIn("framework/scripts/render_dbt_context.py", self.workflow)
-        self.assertIn("--workload transform", self.workflow)
-        self.assertIn("--vars-file \"${RUNNER_TEMP}/esf-dbt-vars.json\"", self.workflow)
+    def test_silver_sql_is_committed_not_generated(self) -> None:
+        self.assertIn("silver_processing/deploy_manifest.txt", self.workflow)
+        self.assertIn("Deploy committed Silver SQL in manifest order", self.workflow)
+        self.assertIn("-f \"project/${path}\"", self.workflow)
+        self.assertNotIn("render_dbt_vars", self.workflow)
+        self.assertNotIn("render_dbt_context", self.workflow)
+        self.assertNotIn("packages.yml", self.workflow)
 
-    def test_config_snapshot_registration_happens_only_after_build(self) -> None:
-        build = self.workflow.index("- name: Build project")
-        register = self.workflow.index("- name: Register deployed dataset configuration snapshots")
-        self.assertLess(build, register)
-        self.assertIn("esf_register_all_dataset_config_snapshots", self.workflow)
-        self.assertIn("--vars \"$(cat \"${RUNNER_TEMP}/esf-dbt-vars.json\")\"", self.workflow)
+    def test_dbt_starts_from_gold_default(self) -> None:
+        self.assertIn("DBT_DEFAULT_SCHEMA: GOLD_MARTS", self.workflow)
+        self.assertIn("Build Gold and Semantic models", self.workflow)
+        self.assertNotIn("esf_register_all_dataset_config_snapshots", self.workflow)
 
     def test_deploy_preserves_immutable_main_history_guard(self) -> None:
         self.assertIn("merge-base --is-ancestor", self.workflow)
         self.assertIn("git -C project checkout --detach", self.workflow)
-        self.assertIn("Project dbt package must pin enterprise-snowflake-data-project-framework", self.workflow)
+        self.assertIn("Validate project contracts before authentication", self.workflow)
+
+    def test_manifest_paths_fail_closed(self) -> None:
+        self.assertIn("Unsafe Silver deployment path", self.workflow)
+        self.assertIn('== *".."*', self.workflow)
 
 
 if __name__ == "__main__":

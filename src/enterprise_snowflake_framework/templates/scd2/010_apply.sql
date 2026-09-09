@@ -1,0 +1,9 @@
+-- __DATASET_ID__: SCD2 apply procedure.
+-- Keep these phases visible as ordinary Snowflake SQL:
+--   NEW_EVENTS
+--   AFFECTED_KEYS
+--   transaction
+--   event-ledger append
+--   affected-history delete
+--   deterministic history rebuild
+--   commit / rollback

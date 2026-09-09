@@ -1,0 +1,1 @@
+-- Reference invariant SQL lives here in a real domain repository.

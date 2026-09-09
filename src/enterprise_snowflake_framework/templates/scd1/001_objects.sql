@@ -1,0 +1,2 @@
+-- __DATASET_ID__: create the authoritative SCD1 current-state table.
+-- Define business columns explicitly from __RAW_CONTRACT__.

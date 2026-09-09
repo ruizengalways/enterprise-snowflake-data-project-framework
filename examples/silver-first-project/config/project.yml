@@ -1,0 +1,6 @@
+schema_version: 2
+project:
+  code: EXAMPLE
+  name: Silver-first reference project
+  repository: enterprise-snowflake-example-analytics
+  owner_team: data-platform

@@ -1,0 +1,2 @@
+-- __DATASET_ID__: replace the trusted Silver relation from BRONZE.__ENTITY_UPPER__.
+-- Keep all transformation SQL visible here.

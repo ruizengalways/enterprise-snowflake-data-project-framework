@@ -1,57 +1,25 @@
-# Dataset control plane v2
+# Operational control plane
 
-The control plane standardizes operational mechanics without becoming the data plane.
+The control plane standardizes operational state without becoming the data plane.
 
 ```text
 DATA PLANE
-BRONZE -> SILVER -> GOLD
+BRONZE -> explicit domain Silver SQL -> SILVER -> dbt -> GOLD/SEMANTIC
 
 CONTROL PLANE
-validated dataset config
-config snapshot
 run state
 landed-data processing checkpoint
 bootstrap handoff
 DQ / reconciliation
 reset / generation
+deployment audit
 observability
 ```
 
-## Dataset grain
+RAW contracts describe source evidence. `silver_processing/<dataset>/pipeline.yml` describes the small, reviewable contract for a domain-owned Silver implementation. Neither contract contains connector configuration or generated runtime SQL.
 
-Runtime/config state is keyed by project + environment + dataset (+ generation where relevant). Datasets in one domain database can therefore use different maintenance and runtime policies without one giant database-level refresh policy.
+`PIPELINE_CHECKPOINT` can record progress over already-landed Snowflake evidence when a pipeline needs it. SQL Server LSNs, Kafka connector offsets, API cursors and similar extraction state remain with ingestion.
 
-Strategy-specific parameters remain in typed Git metadata instead of a wide nullable control table.
+Domain roles use only platform-provisioned domain-scoped views/procedures. Shared `PLATFORM_CONTROL` base tables remain platform-owned and are never a convenient parameter store for arbitrary domain code.
 
-## Source contract versus dataset config
-
-Raw/source contract describes source semantics and evidence fidelity. Dataset config describes downstream Snowflake maintenance semantics. Neither contains connector implementation configuration.
-
-A connector may be Openflow, Snowpipe, Kafka, Fivetran, Airbyte, ADF or custom code; once equivalent Bronze evidence is landed, downstream Framework behavior is the same.
-
-## Checkpoint boundary
-
-`PIPELINE_CHECKPOINT` is for processing progress over landed Snowflake data, for example a last processed landed batch, file identity, event boundary or timestamp already present in Bronze.
-
-It must not store or own:
-
-```text
-SQL Server LSN
-Kafka connector offset
-API extraction cursor
-other connector-owned source position
-```
-
-Those belong to the ingestion system.
-
-## Security boundary
-
-Domain runtime roles do not directly mutate shared `PLATFORM_CONTROL` base tables. Platform infra exposes project-filtered views and guarded domain procedures. Framework helpers derive only those approved relation/procedure names.
-
-## Config snapshots
-
-Git remains desired configuration truth. A deployment snapshot records the validated dataset/raw-contract content, config SHA and Git SHA for audit and observability. The Snowflake snapshot table is not an editable parameter store.
-
-## Custom datasets
-
-Custom business implementation remains explicit domain code. Custom datasets may still register runs/config snapshots, use DQ/reconciliation, query tags and reset lifecycle.
+A deployment can record Git SHA and operational evidence through explicit platform APIs, but the control plane is not the source of truth for Silver transformation SQL. That SQL is reviewed in the domain repository.

@@ -1,4 +1,4 @@
-name: Reusable Project Deploy
+name: Reusable Silver-first Project Deploy
 
 on:
   workflow_call:
@@ -16,7 +16,7 @@ on:
         required: true
         type: string
       framework_ref:
-        description: "Immutable 40-character framework Git commit SHA used by deployment tooling."
+        description: "Immutable toolkit Git commit SHA used for contract validation and shared workflow code."
         required: true
         type: string
       project_dir:
@@ -34,33 +34,20 @@ jobs:
     name: Deploy ${{ inputs.project_code }} ${{ inputs.git_sha }} to ${{ inputs.environment }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-
     env:
-      DBT_AUTHENTICATOR: workload_identity
-      DBT_DEFAULT_SCHEMA: SILVER_STAGING
       ESF_ENVIRONMENT: ${{ inputs.environment }}
-
+      DBT_AUTHENTICATOR: workload_identity
+      DBT_DEFAULT_SCHEMA: GOLD_MARTS
+      SNOWFLAKE_ENHANCED_EXIT_CODES: "1"
     steps:
       - name: Validate immutable deployment inputs
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "${{ inputs.project_code }}" =~ ^[A-Z][A-Z0-9_]{1,31}$ ]]; then
-            echo "Invalid project_code: ${{ inputs.project_code }}" >&2
-            exit 1
-          fi
-          if [[ ! "${{ inputs.environment }}" =~ ^(dev|uat|prod)$ ]]; then
-            echo "environment must be dev, uat, or prod" >&2
-            exit 1
-          fi
-          if [[ ! "${{ inputs.git_sha }}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "git_sha must be a full lowercase 40-character immutable Git commit SHA" >&2
-            exit 1
-          fi
-          if [[ ! "${{ inputs.framework_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "framework_ref must be a full lowercase 40-character immutable Git commit SHA" >&2
-            exit 1
-          fi
+          [[ "${{ inputs.project_code }}" =~ ^[A-Z][A-Z0-9_]{1,31}$ ]]
+          [[ "${{ inputs.environment }}" =~ ^(dev|uat|prod)$ ]]
+          [[ "${{ inputs.git_sha }}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${{ inputs.framework_ref }}" =~ ^[0-9a-f]{40}$ ]]
 
       - name: Load approved Snowflake environment configuration
         shell: bash
@@ -73,10 +60,7 @@ jobs:
             echo "GitHub Environment ${{ inputs.environment }} must define SNOWFLAKE_ACCOUNT and SNOWFLAKE_OIDC_AUDIENCE." >&2
             exit 1
           fi
-          if [[ "${ESF_SNOWFLAKE_OIDC_AUDIENCE}" == "snowflakecomputing.com" ]]; then
-            echo "Use an account-scoped Snowflake OIDC audience, not snowflakecomputing.com." >&2
-            exit 1
-          fi
+          [[ "${ESF_SNOWFLAKE_OIDC_AUDIENCE}" != "snowflakecomputing.com" ]]
           echo "SNOWFLAKE_ACCOUNT=${ESF_SNOWFLAKE_ACCOUNT}" >> "${GITHUB_ENV}"
           echo "SNOWFLAKE_OIDC_AUDIENCE=${ESF_SNOWFLAKE_OIDC_AUDIENCE}" >> "${GITHUB_ENV}"
 
@@ -93,22 +77,15 @@ jobs:
         run: |
           set -euo pipefail
           requested_sha="${{ inputs.git_sha }}"
-          if ! git -C project cat-file -e "${requested_sha}^{commit}" 2>/dev/null; then
-            echo "Requested git_sha does not exist in the checked-out main history." >&2
-            exit 1
-          fi
+          git -C project cat-file -e "${requested_sha}^{commit}"
           if ! git -C project merge-base --is-ancestor "${requested_sha}" HEAD; then
-            echo "git_sha must be reachable from the current main branch history." >&2
+            echo "git_sha must be reachable from current main history." >&2
             exit 1
           fi
           git -C project checkout --detach "${requested_sha}"
-          project_sha="$(git -C project rev-parse HEAD)"
-          if [[ "${project_sha}" != "${requested_sha}" ]]; then
-            echo "Project checkout does not match requested git_sha." >&2
-            exit 1
-          fi
+          [[ "$(git -C project rev-parse HEAD)" == "${requested_sha}" ]]
 
-      - name: Checkout immutable framework revision
+      - name: Checkout immutable toolkit revision
         uses: actions/checkout@v7.0.1
         with:
           repository: ruizengalways/enterprise-snowflake-data-project-framework
@@ -116,24 +93,9 @@ jobs:
           persist-credentials: false
           path: framework
 
-      - name: Verify framework revision and package pin
+      - name: Verify toolkit revision
+        run: '[[ "$(git -C framework rev-parse HEAD)" == "${{ inputs.framework_ref }}" ]]'
         shell: bash
-        run: |
-          set -euo pipefail
-          framework_sha="$(git -C framework rev-parse HEAD)"
-          if [[ "${framework_sha}" != "${{ inputs.framework_ref }}" ]]; then
-            echo "Framework checkout does not match requested framework_ref." >&2
-            exit 1
-          fi
-          packages_file="project/${{ inputs.project_dir }}/packages.yml"
-          if [[ ! -f "${packages_file}" ]]; then
-            echo "Expected dbt packages file not found: ${packages_file}" >&2
-            exit 1
-          fi
-          if ! grep -Eq "^[[:space:]]*revision:[[:space:]]*${framework_sha}[[:space:]]*$" "${packages_file}"; then
-            echo "Project dbt package must pin enterprise-snowflake-data-project-framework to the same framework_ref." >&2
-            exit 1
-          fi
 
       - name: Setup Python
         uses: actions/setup-python@v7.0.0
@@ -142,67 +104,90 @@ jobs:
           cache: pip
           cache-dependency-path: framework/requirements-dbt.txt
 
-      - name: Install pinned dbt toolchain and framework
+      - name: Install toolkit, dbt and Snowflake CLI
         run: |
           python -m pip install -r framework/requirements-dbt.txt
           python -m pip install ./framework
+          python -m pip install "snowflake-cli==3.23.0"
 
-      - name: Render validated deployment context
+      - name: Validate project contracts before authentication
+        run: esf validate --project-root project
+
+      - name: Validate committed Silver deployment manifest
         shell: bash
         run: |
           set -euo pipefail
-          python framework/scripts/render_dbt_context.py \
-            --project-root project \
-            --schema-dir framework/project_schema \
-            --project-code "${{ inputs.project_code }}" \
-            --environment "${{ inputs.environment }}" \
-            --workload transform \
-            --run-id "${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" \
-            --git-sha "${{ inputs.git_sha }}" \
-            --env-file "${GITHUB_ENV}" \
-            --vars-file "${RUNNER_TEMP}/esf-dbt-vars.json"
+          manifest="project/silver_processing/deploy_manifest.txt"
+          test -f "${manifest}"
+          count=0
+          while IFS= read -r raw || [[ -n "${raw}" ]]; do
+            path="${raw%%#*}"
+            path="$(printf '%s' "${path}" | xargs)"
+            [[ -z "${path}" ]] && continue
+            if [[ "${path}" == /* || "${path}" == *".."* || ! "${path}" =~ ^silver_processing/[A-Za-z0-9_/-]+\.sql$ ]]; then
+              echo "Unsafe Silver deployment path: ${path}" >&2
+              exit 1
+            fi
+            test -f "project/${path}"
+            count=$((count + 1))
+          done < "${manifest}"
+          [[ ${count} -gt 0 ]]
+
+      - name: Resolve deployment identity and physical targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          env_upper="$(printf '%s' "${{ inputs.environment }}" | tr '[:lower:]' '[:upper:]')"
+          echo "SNOWFLAKE_USER=SU_GITHUB_${{ inputs.project_code }}_DEPLOY" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_ROLE=AR_${{ inputs.project_code }}_DEPLOY" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_WAREHOUSE=WH_${{ inputs.project_code }}_TRANSFORM" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_DATABASE=${env_upper}_${{ inputs.project_code }}" >> "${GITHUB_ENV}"
+          echo "DBT_ROLE=AR_${{ inputs.project_code }}_DEPLOY" >> "${GITHUB_ENV}"
+          echo "DBT_WAREHOUSE=WH_${{ inputs.project_code }}_TRANSFORM" >> "${GITHUB_ENV}"
+          echo "DBT_DATABASE=${env_upper}_${{ inputs.project_code }}" >> "${GITHUB_ENV}"
 
       - name: Request account-scoped GitHub OIDC token
         shell: bash
         run: |
           set -euo pipefail
-          response="$(curl --fail --silent --show-error \
-            --get \
+          response="$(curl --fail --silent --show-error --get \
             --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
             --data-urlencode "audience=${SNOWFLAKE_OIDC_AUDIENCE}" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}")"
           token="$(jq -er '.value' <<<"${response}")"
           echo "::add-mask::${token}"
           echo "SNOWFLAKE_TOKEN=${token}" >> "${GITHUB_ENV}"
-          echo "SNOWFLAKE_USER=SU_GITHUB_${{ inputs.project_code }}_DEPLOY" >> "${GITHUB_ENV}"
-          echo "DBT_ROLE=AR_${{ inputs.project_code }}_DEPLOY" >> "${GITHUB_ENV}"
 
-      - name: Resolve dbt dependencies
+      - name: Verify Snowflake workload identity
+        shell: bash
         run: |
-          dbt deps \
-            --project-dir "project/${{ inputs.project_dir }}" \
-            --profiles-dir "project/${{ inputs.project_dir }}"
+          snow sql --temporary-connection \
+            --account "${SNOWFLAKE_ACCOUNT}" --user "${SNOWFLAKE_USER}" --role "${SNOWFLAKE_ROLE}" \
+            --warehouse "${SNOWFLAKE_WAREHOUSE}" --database "${SNOWFLAKE_DATABASE}" \
+            --authenticator WORKLOAD_IDENTITY --workload-identity-provider OIDC \
+            --enable-templating NONE --local-only --enhanced-exit-codes \
+            -q 'select current_database(), current_warehouse(), current_user(), current_role()'
 
-      - name: Verify Snowflake deployment identity
+      - name: Deploy committed Silver SQL in manifest order
+        shell: bash
         run: |
-          dbt debug \
-            --target "${{ inputs.environment }}" \
-            --project-dir "project/${{ inputs.project_dir }}" \
-            --profiles-dir "project/${{ inputs.project_dir }}"
+          set -euo pipefail
+          manifest="project/silver_processing/deploy_manifest.txt"
+          while IFS= read -r raw || [[ -n "${raw}" ]]; do
+            path="${raw%%#*}"
+            path="$(printf '%s' "${path}" | xargs)"
+            [[ -z "${path}" ]] && continue
+            echo "Applying ${path}"
+            snow sql --temporary-connection \
+              --account "${SNOWFLAKE_ACCOUNT}" --user "${SNOWFLAKE_USER}" --role "${SNOWFLAKE_ROLE}" \
+              --warehouse "${SNOWFLAKE_WAREHOUSE}" --database "${SNOWFLAKE_DATABASE}" \
+              --authenticator WORKLOAD_IDENTITY --workload-identity-provider OIDC \
+              --enable-templating NONE --local-only --enhanced-exit-codes \
+              -f "project/${path}"
+          done < "${manifest}"
 
-      - name: Build project
-        run: |
-          dbt build \
-            --target "${{ inputs.environment }}" \
-            --vars "$(cat "${RUNNER_TEMP}/esf-dbt-vars.json")" \
-            --project-dir "project/${{ inputs.project_dir }}" \
-            --profiles-dir "project/${{ inputs.project_dir }}"
+      - name: Verify dbt connection
+        run: dbt debug --target "${{ inputs.environment }}" --project-dir "project/${{ inputs.project_dir }}" --profiles-dir "project/${{ inputs.project_dir }}"
 
-      - name: Register deployed dataset configuration snapshots
-        run: |
-          dbt run-operation esf_register_all_dataset_config_snapshots \
-            --target "${{ inputs.environment }}" \
-            --args '{"project_code": "${{ inputs.project_code }}", "git_sha": "${{ inputs.git_sha }}"}' \
-            --vars "$(cat "${RUNNER_TEMP}/esf-dbt-vars.json")" \
-            --project-dir "project/${{ inputs.project_dir }}" \
-            --profiles-dir "project/${{ inputs.project_dir }}"
+      - name: Build Gold and Semantic models
+        run: dbt build --target "${{ inputs.environment }}" --project-dir "project/${{ inputs.project_dir }}" --profiles-dir "project/${{ inputs.project_dir }}"

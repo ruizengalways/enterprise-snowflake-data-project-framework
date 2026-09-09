@@ -1,58 +1,13 @@
-# Domain-scoped operational control v2
+# Domain-scoped operational control
 
-Project runtime access to account-local `PLATFORM_CONTROL.OPERATIONS` uses only domain-scoped views and guarded procedures provisioned by platform infra.
+Account-local `PLATFORM_CONTROL` state is exposed through domain-scoped views and guarded procedures provisioned by platform infra. Shared base objects remain platform-owned; project roles do not receive direct DML on them.
 
-Shared base objects remain platform-owned. Project roles do not require direct DML on them.
+Typical surfaces include domain-scoped pipeline runs, checks, landed-data processing checkpoints, bootstrap handoff and reset lifecycle procedures.
 
-## Domain surfaces
+If explicit Silver SQL needs a control operation, call the guarded procedure directly from readable domain SQL or from the orchestrating workflow. Do not hide the call behind a dbt macro layer.
 
-Typical scoped read surfaces:
+Processing checkpoints describe already-landed evidence only. Connector-owned source positions stay with the connector.
 
-```text
-<DOMAIN>_PIPELINE_CHECKPOINT
-<DOMAIN>_PIPELINE_RUN
-<DOMAIN>_PIPELINE_CHECK_RESULT
-<DOMAIN>_PIPELINE_BOOTSTRAP
-```
+Snowflake-native runtime history remains authoritative where Snowflake owns the runtime, for example Task history. The control plane should add business/operational context rather than build a second scheduler.
 
-Typical guarded write procedures:
-
-```text
-<DOMAIN>_ADVANCE_PIPELINE_CHECKPOINT
-<DOMAIN>_PIPELINE_RUN_START
-<DOMAIN>_PIPELINE_RUN_FINISH
-<DOMAIN>_RECORD_PIPELINE_CHECK_RESULT
-<DOMAIN>_PIPELINE_BOOTSTRAP_*
-```
-
-The project code/environment boundary is fixed by the platform-generated object, not supplied as arbitrary runtime DML predicates.
-
-## Processing checkpoints only
-
-Framework checkpoint helpers intentionally accept only landed-data processing checkpoint kinds. A checkpoint might record the last Bronze timestamp/batch/file/event boundary successfully incorporated into Silver.
-
-It is not a source connector ledger. Do not put SQL Server LSNs, Kafka connector offsets or API extraction cursors here.
-
-Example:
-
-```jinja
-{{ enterprise_snowflake_framework.esf_domain_checkpoint_read_sql(
-    'TRANSPORT',
-    'vehicle_position',
-    'watermark'
-) }}
-```
-
-The matching advance call writes through the guarded domain procedure rather than shared-table DML.
-
-## Run and quality state
-
-Run start/finish helpers register status, checkpoint-before/after, row counts and errors. DQ helpers record bounded check results through the domain procedure. These records provide operational answers beyond GitHub logs: dataset, last success, duration, rows, checkpoint and DQ state.
-
-## No compatibility layer
-
-V2 exposes the domain-scoped contract as the project runtime API. Deprecated lower-level compatibility aliases/direct-DML helpers are not part of the clean public surface.
-
-## Live gate
-
-Static tests can prove naming, validation and generated SQL shape. DEV/WIF acceptance must still prove grants, cross-domain denial, transaction behavior and real Snowflake procedure execution before those are claimed as live successes.
+Static tests prove naming and fail-closed contracts; DEV/WIF acceptance must still prove grants, cross-domain denial and real Snowflake procedure execution.

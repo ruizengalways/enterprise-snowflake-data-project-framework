@@ -1,18 +1,18 @@
 # Landed-data processing bootstrap handoff
 
-Bootstrap in Framework v2 is not source extraction orchestration. It records the handoff between an initial set of **already-landed Bronze evidence** and steady-state downstream processing.
+Bootstrap is not source extraction orchestration. It records the handoff between an initial set of already-landed Bronze evidence and steady-state Silver processing.
 
 ```text
 ingestion lands Bronze snapshot/evidence
         |
         | ingestion ownership ends
         v
-Framework bootstrap records landed boundary
+PLATFORM_CONTROL records landed processing boundary
         -> validate/reconcile landed snapshot
         -> commit processing handoff
-        -> Silver processing continues after that boundary
+        -> explicit domain Silver SQL continues after that boundary
 ```
 
-The boundary value must be meaningful inside Snowflake landed data, such as a landed timestamp, batch identity, file identity, snapshot identity or event boundary. It must not be an MSSQL LSN, Kafka connector offset or API extraction cursor owned by the ingestion system.
+The boundary must be meaningful inside landed Snowflake data, such as a landed timestamp, batch identity, file identity, snapshot identity or event boundary. It must not be an MSSQL LSN, Kafka connector offset or API extraction cursor owned by ingestion.
 
-Bootstrap state is accessed only through domain-scoped `PLATFORM_CONTROL` views/procedures. Reconciliation must complete before the handoff is committed. This state is operational control metadata; it does not describe connector implementation in dataset YAML.
+Bootstrap state is accessed only through domain-scoped `PLATFORM_CONTROL` views/procedures. The toolkit may validate a domain contract or workflow, but it does not generate or execute the Silver business/state logic.

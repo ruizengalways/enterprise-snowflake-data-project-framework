@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+# PR/personal workspaces mirror only the active architecture surface. BRONZE is
+# ingestion-owned evidence; SILVER_CANONICAL is explicit Snowflake processing;
+# dbt owns GOLD_MARTS/GOLD_SEMANTIC. DQ remains a shared validation surface.
 STANDARD_LAYERS = (
     "BRONZE",
-    "SILVER_STAGING",
-    "SILVER_INTERMEDIATE",
     "SILVER_CANONICAL",
     "GOLD_MARTS",
     "GOLD_SEMANTIC",
@@ -18,7 +19,6 @@ _MAX_IDENTIFIER_LENGTH = 255
 
 
 def normalize_token(value: str) -> str:
-    """Convert an external identity token into a stable unquoted Snowflake token."""
     token = _TOKEN_RE.sub("_", value.strip().upper()).strip("_")
     token = re.sub(r"_+", "_", token)
     if not token:

@@ -1,34 +1,20 @@
-# Snowflake-native processing first
+# Snowflake-native Silver processing
 
-The Framework starts after Bronze data exists and prefers Snowflake-native primitives for downstream reliability.
+Bronze-to-Silver correctness uses explicit Snowflake SQL committed in each domain repository.
 
 Preferred order:
 
 ```text
-Snowflake native primitive
-  -> thin Framework convention/helper when consistency matters
-  -> explicit domain SQL when semantics differ
-  -> custom runtime state only when genuinely necessary
+plain SQL when sufficient
+  -> MERGE / transaction when stateful
+  -> stored procedure when multi-step atomic logic is clearer
+  -> Stream / Task when Snowflake-managed incremental execution is useful
 ```
 
-## Stateful Silver
+Do not insert a shared macro/materialization layer between the domain engineer and those statements.
 
-Use regular tables and explicit transactional DML for state/history correctness when procedural state matters. The standard SCD2 materialization keeps retained landed events in a technical sidecar table and rebuilds only affected keys.
+SCD1 and SCD2 are Silver correctness concerns. Their concrete SQL should show keys, ordering, delete behavior, replay handling and late-arrival behavior locally. Scaffolded starter files are copied once and then belong to the domain.
 
-Snowflake Streams/Tasks may be used for a project that explicitly chooses those runtime capabilities, but Stream offsets remain Snowflake-owned and are never copied into Framework checkpoint state.
+Dynamic Tables remain useful for declarative SELECT-defined results, especially Gold derivations, but are not the default engine for complex state/history maintenance.
 
-## Dynamic Tables
-
-Use Dynamic Tables for declarative SELECT-defined results where they fit operationally, especially Gold derivations. They are not the default mechanism for complex SCD2 state maintenance.
-
-## Processing checkpoint state
-
-`PLATFORM_CONTROL.OPERATIONS.PIPELINE_CHECKPOINT` may track progress over already-landed Snowflake evidence. It does not replace an ingestion connector checkpoint store.
-
-## Task observability
-
-When Snowflake Tasks are the runtime, Snowflake task history is authoritative for task execution. Framework observability may link dataset/config/Git context but should not build a second scheduler or duplicate Snowflake-owned offsets.
-
-## Data quality
-
-Prefer Snowflake-native quality capabilities when they directly represent the check. Keep explicit SQL for reconciliation and domain-specific checks. Framework DQ helpers stay bounded and technical.
+`PLATFORM_CONTROL.OPERATIONS.PIPELINE_CHECKPOINT` may track processing progress over already-landed evidence. Stream offsets and connector offsets remain owned by their native runtimes.

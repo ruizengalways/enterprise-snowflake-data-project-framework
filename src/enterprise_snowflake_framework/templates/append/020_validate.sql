@@ -1,0 +1,2 @@
+-- __DATASET_ID__: validation queries.
+-- Add uniqueness checks for the RAW-contract idempotency key and any domain-specific invariants.

@@ -1,0 +1,1 @@
+-- Reference object DDL lives here in a real domain repository.
