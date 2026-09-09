@@ -8,7 +8,7 @@ from enterprise_snowflake_framework.metadata_validation import validate_project_
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate an Enterprise Snowflake data-project metadata tree.")
+    parser = argparse.ArgumentParser(description="Validate Enterprise Snowflake v2 project metadata.")
     parser.add_argument("--project-root", type=Path, required=True)
     parser.add_argument(
         "--schema-dir",
@@ -25,7 +25,7 @@ def main() -> None:
         for error in errors:
             print(f"ERROR: {error}")
         raise SystemExit(1)
-    print(f"Metadata validation passed: {args.project_root}")
+    print(f"Metadata v2 validation passed: {args.project_root}")
 
 
 if __name__ == "__main__":

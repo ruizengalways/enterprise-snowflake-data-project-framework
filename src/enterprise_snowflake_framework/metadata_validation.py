@@ -8,34 +8,13 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from .bootstrap_validation import validate_bootstrap_metadata
-from .dataset_metadata import (
-    DatasetMetadataError,
-    legacy_dataset_view,
-    normalize_dataset_document,
-    validate_execution_model,
-)
+from .dataset_metadata import DatasetMetadataError, canonical_dataset, validate_runtime_model
 from .scd2_validation import validate_scd2_metadata
 
 SCHEMA_FILES = {
     "project": "project.schema.json",
     "dataset": "dataset.schema.json",
-    "dataset_v2": "dataset-v2.schema.json",
     "raw_contract": "raw_contract.schema.json",
-}
-_KEYED_STRATEGIES = {
-    "incremental_merge",
-    "scd2_snapshot",
-    "scd2_merge",
-    "scd2_stream_task",
-}
-_SCD2_STRATEGIES = {
-    "scd2_snapshot",
-    "scd2_merge",
-    "scd2_stream_task",
-}
-_EVENT_SCD2_STRATEGIES = {
-    "scd2_merge",
-    "scd2_stream_task",
 }
 _CAPTURE_FIDELITY = {
     "snapshot": {"current_state"},
@@ -61,10 +40,7 @@ class MetadataValidationError(ValueError):
 
 def load_document(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() == ".json":
-        value = json.loads(text)
-    else:
-        value = yaml.safe_load(text)
+    value = json.loads(text) if path.suffix.lower() == ".json" else yaml.safe_load(text)
     if not isinstance(value, dict):
         raise MetadataValidationError(f"{path}: document root must be an object")
     return value
@@ -74,42 +50,35 @@ def load_schema(schema_dir: Path, kind: str) -> dict[str, Any]:
     return json.loads((schema_dir / SCHEMA_FILES[kind]).read_text(encoding="utf-8"))
 
 
-def dataset_schema_kind(document: dict[str, Any]) -> str:
-    version = document.get("schema_version")
-    if version == 1:
-        return "dataset"
-    if version == 2:
-        return "dataset_v2"
-    return "dataset_v2"
-
-
 def schema_errors(document: dict[str, Any], schema: dict[str, Any], path: Path) -> list[str]:
-    validator = Draft202012Validator(schema)
     errors: list[str] = []
-    for error in sorted(validator.iter_errors(document), key=lambda item: list(item.absolute_path)):
+    for error in sorted(
+        Draft202012Validator(schema).iter_errors(document),
+        key=lambda item: list(item.absolute_path),
+    ):
         location = ".".join(str(part) for part in error.absolute_path) or "<root>"
         errors.append(f"{path}: {location}: {error.message}")
     return errors
 
 
 def validate_raw_contract(document: dict[str, Any], path: Path) -> list[str]:
+    """Validate source semantics only; this does not create or own connector checkpoints."""
     contract = document["contract"]
     columns = contract["columns"]
     names = [column["name"] for column in columns]
+    column_names = set(names)
+    columns_by_name = {column["name"]: column for column in columns}
     errors: list[str] = []
 
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         errors.append(f"{path}: contract.columns contains duplicate names: {', '.join(duplicates)}")
 
-    column_names = set(names)
-    columns_by_name = {column["name"]: column for column in columns}
     missing_keys = [name for name in contract["business_key"] if name not in column_names]
     if missing_keys:
         errors.append(f"{path}: business_key columns missing from columns: {', '.join(missing_keys)}")
     nullable_keys = [
-        name
-        for name in contract["business_key"]
+        name for name in contract["business_key"]
         if name in columns_by_name and columns_by_name[name].get("nullable") is True
     ]
     if nullable_keys:
@@ -133,140 +102,81 @@ def validate_raw_contract(document: dict[str, Any], path: Path) -> list[str]:
         archetype = capture["archetype"]
         fidelity = capture["fidelity"]
         checkpoint_kind = capture["checkpoint_kind"]
-
         if fidelity not in _CAPTURE_FIDELITY[archetype]:
-            allowed = ", ".join(sorted(_CAPTURE_FIDELITY[archetype]))
             errors.append(
-                f"{path}: capture archetype {archetype} does not support fidelity {fidelity}; allowed: {allowed}"
+                f"{path}: capture archetype {archetype} does not support fidelity {fidelity}"
             )
-
         if checkpoint_kind not in _CAPTURE_CHECKPOINTS[archetype]:
-            allowed = ", ".join(sorted(_CAPTURE_CHECKPOINTS[archetype]))
             errors.append(
-                f"{path}: capture archetype {archetype} does not support checkpoint_kind {checkpoint_kind}; "
-                f"allowed: {allowed}"
+                f"{path}: capture archetype {archetype} does not support checkpoint_kind {checkpoint_kind}"
             )
-
-        lookback = capture.get("lookback_minutes")
-        if lookback is not None and archetype != "watermark":
-            errors.append(f"{path}: capture.lookback_minutes is valid only for watermark archetype")
-
         for field in ("ordering_columns", "idempotency_columns"):
             undeclared = [name for name in capture.get(field, []) if name not in column_names]
             if undeclared:
                 errors.append(f"{path}: capture.{field} columns are not declared: {', '.join(undeclared)}")
-
-        if archetype == "watermark" and not source_timestamp and not capture.get("ordering_columns"):
-            errors.append(
-                f"{path}: watermark capture requires contract.source_timestamp or capture.ordering_columns"
-            )
-
-        if archetype == "full_change":
-            if not capture.get("ordering_columns") and not changes.get("sequence_column"):
-                errors.append(
-                    f"{path}: full_change capture requires capture.ordering_columns or change_semantics.sequence_column"
-                )
-            if not capture.get("idempotency_columns"):
-                errors.append(f"{path}: full_change capture requires capture.idempotency_columns")
-
-        if archetype == "snapshot_diff" and changes.get("delete_semantics") != "inferred_snapshot_diff":
-            errors.append(
-                f"{path}: snapshot_diff capture requires change_semantics.delete_semantics=inferred_snapshot_diff"
-            )
-
-    return errors
-
-
-def validate_strategy_capture_compatibility(
-    dataset: dict[str, Any],
-    contract: dict[str, Any],
-    path: Path,
-) -> list[str]:
-    strategy = dataset["load_strategy"]
-    if strategy not in _SCD2_STRATEGIES:
-        return []
-
-    capture = contract.get("capture")
-    if not capture:
-        return [f"{path}: load_strategy {strategy} requires raw contract capture metadata"]
-
-    archetype = capture["archetype"]
-    fidelity = capture["fidelity"]
-    errors: list[str] = []
-
-    if strategy == "scd2_snapshot" and archetype != "snapshot":
-        errors.append(
-            f"{path}: load_strategy scd2_snapshot requires capture.archetype=snapshot; got {archetype}"
-        )
-
-    if strategy in _EVENT_SCD2_STRATEGIES:
-        if fidelity not in {"full_change", "full_event"}:
-            errors.append(
-                f"{path}: load_strategy {strategy} requires capture fidelity full_change/full_event; got {fidelity}"
-            )
-        if archetype not in {"full_change", "cursor_or_file"}:
-            errors.append(
-                f"{path}: load_strategy {strategy} requires an append-preserved event capture archetype; got {archetype}"
-            )
+        if archetype == "full_change" and not capture.get("idempotency_columns"):
+            errors.append(f"{path}: full_change capture requires capture.idempotency_columns")
 
     return errors
 
 
 def validate_dataset(
-    document: dict[str, Any],
-    path: Path,
-    project_root: Path,
-    raw_schema: dict[str, Any],
+    document: dict[str, Any], path: Path, project_root: Path, raw_schema: dict[str, Any]
 ) -> list[str]:
     errors: list[str] = []
     try:
-        canonical = normalize_dataset_document(document)
+        dataset = canonical_dataset(document)
     except DatasetMetadataError as exc:
         return [f"{path}: {exc}"]
 
-    errors.extend(validate_execution_model(canonical, path))
-    dataset = legacy_dataset_view(canonical)
+    errors.extend(validate_runtime_model(dataset, path))
 
-    if dataset["load_strategy"] in _KEYED_STRATEGIES and not dataset.get("business_key"):
-        errors.append(f"{path}: load_strategy {dataset['load_strategy']} requires dataset.business_key")
+    raw_contract_ref = dataset.get("raw_contract")
+    if not raw_contract_ref:
+        if dataset.get("load") and dataset["load"]["strategy"] in {
+            "append_only", "incremental_merge", "scd1", "scd2"
+        }:
+            errors.append(
+                f"{path}: stateful source-maintenance strategy {dataset['load']['strategy']} requires dataset.raw_contract"
+            )
+        return errors
 
-    freshness = dataset.get("freshness")
-    if freshness and freshness["warn_after_minutes"] > freshness["error_after_minutes"]:
-        errors.append(f"{path}: freshness warn_after_minutes must be <= error_after_minutes")
-
-    contract_path = (project_root / dataset["raw_contract"]).resolve()
+    contract_path = (project_root / raw_contract_ref).resolve()
     try:
         contract_path.relative_to(project_root.resolve())
     except ValueError:
-        errors.append(f"{path}: raw_contract escapes project root: {dataset['raw_contract']}")
+        errors.append(f"{path}: raw_contract escapes project root: {raw_contract_ref}")
         return errors
-
     if not contract_path.is_file():
-        errors.append(f"{path}: raw_contract not found: {dataset['raw_contract']}")
+        errors.append(f"{path}: raw_contract not found: {raw_contract_ref}")
         return errors
 
     contract_document = load_document(contract_path)
     contract_schema_errors = schema_errors(contract_document, raw_schema, contract_path)
     errors.extend(contract_schema_errors)
-    if not contract_schema_errors:
-        raw_errors = validate_raw_contract(contract_document, contract_path)
-        errors.extend(raw_errors)
-        if not raw_errors:
-            contract = contract_document["contract"]
-            errors.extend(validate_bootstrap_metadata(contract, contract_path))
-            errors.extend(
-                validate_strategy_capture_compatibility(
-                    dataset,
-                    contract,
-                    path,
-                )
-            )
-            errors.extend(
-                validate_scd2_metadata(
-                    dataset,
-                    contract,
-                    path,
-                )
+    if contract_schema_errors:
+        return errors
+
+    raw_errors = validate_raw_contract(contract_document, contract_path)
+    errors.extend(raw_errors)
+    if raw_errors:
+        return errors
+
+    contract = contract_document["contract"]
+    errors.extend(validate_bootstrap_metadata(contract, contract_path))
+    errors.extend(validate_scd2_metadata(dataset, contract, path))
+
+    load = dataset.get("load")
+    if load and load.get("business_key") and load["business_key"] != contract["business_key"]:
+        errors.append(
+            f"{path}: load.business_key must match raw contract business_key; "
+            f"dataset={load['business_key']}, contract={contract['business_key']}"
+        )
+    if load and load.get("watermark_column"):
+        declared = {column["name"] for column in contract["columns"]}
+        if load["watermark_column"] not in declared:
+            errors.append(
+                f"{path}: load.watermark_column is not declared by raw contract: {load['watermark_column']}"
             )
 
     return errors
@@ -276,7 +186,6 @@ def validate_project_tree(project_root: Path, schema_dir: Path) -> list[str]:
     project_root = project_root.resolve()
     schema_dir = schema_dir.resolve()
     errors: list[str] = []
-
     project_file = project_root / "config" / "project.yml"
     datasets_dir = project_root / "config" / "datasets"
 
@@ -285,31 +194,21 @@ def validate_project_tree(project_root: Path, schema_dir: Path) -> list[str]:
     if not datasets_dir.is_dir():
         return [f"{datasets_dir}: required datasets directory not found"]
 
-    project_schema = load_schema(schema_dir, "project")
-    raw_schema = load_schema(schema_dir, "raw_contract")
-
     project_document = load_document(project_file)
-    errors.extend(schema_errors(project_document, project_schema, project_file))
-
+    errors.extend(schema_errors(project_document, load_schema(schema_dir, "project"), project_file))
+    dataset_schema = load_schema(schema_dir, "dataset")
+    raw_schema = load_schema(schema_dir, "raw_contract")
     dataset_paths = sorted([*datasets_dir.glob("*.yml"), *datasets_dir.glob("*.yaml")])
     if not dataset_paths:
-        errors.append(f"{datasets_dir}: at least one dataset metadata file is required")
-        return errors
+        return errors + [f"{datasets_dir}: at least one dataset metadata file is required"]
 
     seen_ids: dict[str, Path] = {}
     for dataset_path in dataset_paths:
         document = load_document(dataset_path)
-        version = document.get("schema_version")
-        if version not in {1, 2}:
-            errors.append(f"{dataset_path}: unsupported dataset schema_version: {version!r}")
+        current_errors = schema_errors(document, dataset_schema, dataset_path)
+        errors.extend(current_errors)
+        if current_errors:
             continue
-
-        dataset_schema = load_schema(schema_dir, dataset_schema_kind(document))
-        current_schema_errors = schema_errors(document, dataset_schema, dataset_path)
-        errors.extend(current_schema_errors)
-        if current_schema_errors:
-            continue
-
         dataset_id = document["dataset"]["id"]
         if dataset_id in seen_ids:
             errors.append(
@@ -317,7 +216,6 @@ def validate_project_tree(project_root: Path, schema_dir: Path) -> list[str]:
             )
         else:
             seen_ids[dataset_id] = dataset_path
-
         errors.extend(validate_dataset(document, dataset_path, project_root, raw_schema))
 
     return errors
