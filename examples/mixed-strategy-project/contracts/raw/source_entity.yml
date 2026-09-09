@@ -1,0 +1,56 @@
+schema_version: 1
+contract:
+  source_system: example_source
+  entity: source_entity
+  grain: one row per source entity change
+  business_key:
+    - entity_id
+  source_timestamp: source_updated_at
+  columns:
+    - name: entity_id
+      type: VARCHAR
+      nullable: false
+      classification: internal
+    - name: value
+      type: VARCHAR
+      nullable: true
+      classification: internal
+    - name: source_updated_at
+      type: TIMESTAMP_NTZ
+      nullable: false
+      classification: internal
+    - name: source_operation
+      type: VARCHAR
+      nullable: false
+      classification: internal
+    - name: source_sequence
+      type: NUMBER
+      nullable: false
+      classification: internal
+    - name: ingested_at
+      type: TIMESTAMP_NTZ
+      nullable: false
+      classification: internal
+  change_semantics:
+    mode: cdc
+    operation_column: source_operation
+    sequence_column: source_sequence
+    delete_semantics: tombstone
+  capture:
+    archetype: full_change
+    fidelity: full_change
+    checkpoint_kind: source_position
+    ordering_columns:
+      - source_updated_at
+      - source_sequence
+    idempotency_columns:
+      - entity_id
+      - source_sequence
+    bootstrap:
+      mode: snapshot_then_incremental
+      snapshot_consistency: at_handoff_position
+      incremental_start: exclusive
+      reconciliation_required: true
+  cadence: micro-batch
+  retention_days: 30
+  breaking_change_policy: versioned_contract

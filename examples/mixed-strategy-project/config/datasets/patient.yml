@@ -1,0 +1,17 @@
+schema_version: 2
+
+dataset:
+  id: patient
+  owner_team: example-data
+  raw_contract: contracts/raw/source_entity.yml
+  load:
+    strategy: scd1
+    business_key:
+      - entity_id
+    watermark_column: source_updated_at
+  materialization:
+    type: table
+  runtime:
+    mode: dbt
+  compute:
+    workload: transform

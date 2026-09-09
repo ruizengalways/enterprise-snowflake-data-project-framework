@@ -1,6 +1,0 @@
-schema_version: 1
-project:
-  code: EXAMPLE
-  name: Mixed Strategy Example
-  repository: enterprise-snowflake-example-analytics
-  owner_team: example-data
