@@ -1,0 +1,3 @@
+silver_processing/orders_mssql/order_status/001_objects.sql
+silver_processing/orders_mssql/order_status/010_apply.sql
+silver_processing/orders_mssql/order_status/020_validate.sql

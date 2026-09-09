@@ -2,84 +2,141 @@
 
 This repository is intentionally **not a data runtime framework**.
 
-Its job is to make domain repositories easy to start, validate, review and operate without hiding SQL behind shared Jinja/macros.
+Its responsibility is simple:
+
+```text
+Framework owns project creation.
+Domain repositories own project evolution.
+```
+
+The toolkit creates readable project/source/dataset starters, validates contracts, and provides reusable CI/CD guardrails. Generated SQL is ordinary source code committed to the domain repository. Deployment executes committed source; it never regenerates business SQL from metadata.
 
 ## Architecture boundary
 
 ```text
 Source
-  -> ingestion
-  -> BRONZE                 raw / replayable evidence
-  -> explicit Silver SQL    domain-owned Snowflake SQL
-  -> SILVER                 trusted current/history/canonical data
-  -> dbt
-  -> GOLD                   marts / dimensions / facts / KPI
-  -> SEMANTIC               consumption-facing models
+  -> Ingestion
+  -> BRONZE
+  -> explicit domain-owned Snowflake SQL
+  -> SILVER
+  -> dbt starts here
+  -> GOLD
+  -> SEMANTIC
 ```
 
-`Source -> BRONZE` is ingestion responsibility. Connector positions such as SQL Server LSNs, Kafka offsets and API cursors remain with the ingestion technology.
+**dbt starts from trusted Silver.** Ingestion remains source-specific. SQL Server CDC, Kafka, REST APIs, Snowpipe, Snowpipe Streaming, Openflow, ADF, Fivetran, custom Python and files can all coexist without a shared ingestion runtime DSL.
 
-`BRONZE -> SILVER` is explicit Snowflake processing. SCD1, SCD2, deduplication, delete handling, replay and late-arrival correction live in readable SQL committed to the domain repository.
+## Source system is the durable organization boundary
 
-**dbt starts from trusted Silver.** It is used for the warehouse modeling work it is good at: facts, dimensions, marts, business joins, aggregations, tests, lineage, documentation and semantic models.
-
-## What is reusable
-
-The toolkit centralizes only things that remain useful without hiding runtime behavior:
-
-- packaged JSON Schemas for project, RAW and Silver pipeline contracts;
-- `esf validate` for static contract checks;
-- `esf scaffold` for copying reference patterns into a domain repository;
-- reusable CI/deployment workflows;
-- human-readable reference patterns and tests.
-
-Generated Silver SQL belongs to the domain team. It is committed, reviewed and modified in that repository. A later toolkit release does not silently change an already-deployed pipeline.
-
-## What is deliberately not reusable runtime
-
-There is no shared dbt package, no `esf_apply_dataset_config`, no custom dbt SCD materialization and no metadata-to-SQL runtime engine.
-
-A domain engineer should be able to understand a Silver pipeline by opening:
+A domain can contain many sources. Keep contracts, ingestion assets and Silver processing grouped by source system:
 
 ```text
-silver_processing/<dataset>/
-  README.md
-  pipeline.yml
-  001_objects.sql
-  010_apply.sql
-  020_validate.sql
+config/sources/fleet_mssql.yml
+contracts/raw/fleet_mssql/customer.yml
+ingestion/fleet_mssql/
+silver_processing/fleet_mssql/customer/
 ```
 
-without reading this repository first.
+Do not organize long-lived source code around `batch_1`, `wave_2`, or similar rollout labels.
 
 ## CLI
+
+Install the Python package and use one CLI:
 
 ```bash
 python -m pip install .
 
-esf validate --project-root ../enterprise-snowflake-transport-analytics
-
-esf scaffold scd2 vehicle_status \
-  --project-root ../enterprise-snowflake-transport-analytics \
-  --raw-contract contracts/raw/vehicle_status.yml
+esf init-project --project-root .
+esf add-source fleet_mssql --project-root .
+esf plan --source fleet_mssql --project-root .
+esf scaffold scd2 customer --source fleet_mssql --project-root .
+esf scaffold-all --source fleet_mssql --project-root .
+esf validate --project-root .
 ```
 
-`scaffold` creates source files once. It does not participate when the pipeline runs.
+There is deliberately **no `--force`** for scaffolding.
 
-## Reuse model
+## Append-only scaffolding ownership
 
-The initial scaffold patterns are `append`, `full_refresh`, `scd1` and `scd2`; `custom` is accepted by the Silver contract for domain-owned implementations that do not fit a standard starter.
+The critical rule is:
 
-The SCD2 pattern preserves deterministic source ordering, idempotency, tombstone delete/reinsert semantics, authoritative history and affected-key late-arrival rebuild. The concrete SQL remains visible in the domain repository.
+```text
+NOT EXISTS
+    -> scaffold
+DOMAIN OWNED
+    -> DOMAIN OWNED FOREVER
+```
 
-## Deployment
+Once `silver_processing/<source>/<dataset>/` exists, Framework scaffold commands never write into that directory again. This remains true even when a standard starter file is missing. `plan`/`scaffold-all` report the directory as domain-owned and warn about incomplete starter layout, but change zero bytes.
 
-A domain repository commits `silver_processing/deploy_manifest.txt`. The reusable workflow validates the contracts, applies exactly those committed SQL files in order, and then runs ordinary dbt from Silver into Gold/Semantic. It does not generate Silver SQL at deploy time.
+Example growth:
 
-## Control plane
+```text
+fleet_mssql manifest: 40 datasets
+scaffold-all          -> created 40, skipped 0, overwritten 0
 
-`PLATFORM_CONTROL` remains a separate enterprise concern for run/reset lifecycle, audit, quality and guarded domain-scoped operational APIs. Domain processing SQL may call those explicit APIs; it never receives direct DML on shared control tables.
+domain engineers edit customer/010_apply.sql
 
-## Portability
+fleet_mssql manifest: 60 datasets
+plan                  -> existing 40, new 20, will overwrite 0
+scaffold-all          -> created 20, skipped 40, overwritten 0
+```
 
-Domain standalone fixtures remain independent of this toolkit, `PLATFORM_CONTROL`, Terraform and enterprise WIF.
+The same rule isolates multiple sources: `esf scaffold-all --source gtfs_api` only plans/creates `gtfs_api` dataset directories and does not touch `fleet_mssql`.
+
+## Source manifests are creation inputs, not runtime DSL
+
+A source manifest is intentionally small:
+
+```yaml
+schema_version: 1
+source:
+  id: fleet_mssql
+  owner: transport
+
+datasets:
+  customer:
+    pattern: scd2
+    raw_contract: contracts/raw/fleet_mssql/customer.yml
+  orders:
+    pattern: scd1
+    raw_contract: contracts/raw/fleet_mssql/orders.yml
+```
+
+Supported starter patterns are `append`, `full_refresh`, `scd1`, `scd2`, and `custom`.
+
+Source manifests do not define warehouse selection, task schedules, dbt materializations, runtime modes, connector offsets, or hidden SQL generation.
+
+## Slim Silver pipeline metadata
+
+RAW contracts own evidence semantics such as business key, ordering columns, idempotency key, source timestamp and delete semantics. Silver pipeline metadata does not repeat those values.
+
+A generated SCD2 pipeline is close to:
+
+```yaml
+schema_version: 1
+pipeline:
+  id: customer
+  pattern: scd2
+  raw_contract: contracts/raw/fleet_mssql/customer.yml
+  input:
+    relation: BRONZE.CUSTOMER
+  output:
+    history: SILVER.CUSTOMER_HISTORY
+    current: SILVER.CUSTOMER_CURRENT
+  tracked_columns:
+    - name
+    - status
+```
+
+## dbt and deployment
+
+Silver processing and dbt stay in the same domain repository so one Git SHA represents one domain release. `init-project` creates only a dbt skeleton (`models/sources`, `models/marts`, `models/semantic`, `tests`); it does not generate marts, KPIs, or semantic business logic.
+
+A domain repository owns `silver_processing/deploy_manifest.txt`. The reusable deployment workflow validates contracts, applies exactly those committed SQL files in manifest order, then runs dbt for Gold/Semantic. No scaffolding happens during deployment.
+
+## Deliberately absent
+
+The toolkit does not contain a shared dbt package, shared dbt macros, custom dbt SCD materializations, `esf_apply_dataset_config`, runtime metadata routing, metadata-to-runtime SQL generation, a central SCD runtime engine, connector-specific state, or an ingestion runtime framework.
+
+Live Snowflake/WIF acceptance is also outside the unit/CI scope unless it is explicitly run against a configured environment.

@@ -1,0 +1,16 @@
+schema_version: 1
+
+pipeline:
+  id: order_status
+  pattern: scd2
+  raw_contract: contracts/raw/orders_mssql/order_status.yml
+
+  input:
+    relation: BRONZE.ORDER_STATUS
+
+  output:
+    history: SILVER.ORDER_STATUS_HISTORY
+    current: SILVER.ORDER_STATUS_CURRENT
+
+  tracked_columns:
+    - status

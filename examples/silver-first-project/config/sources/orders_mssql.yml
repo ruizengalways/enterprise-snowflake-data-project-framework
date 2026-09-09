@@ -1,0 +1,10 @@
+schema_version: 1
+
+source:
+  id: orders_mssql
+  owner: example
+
+datasets:
+  order_status:
+    pattern: scd2
+    raw_contract: contracts/raw/orders_mssql/order_status.yml

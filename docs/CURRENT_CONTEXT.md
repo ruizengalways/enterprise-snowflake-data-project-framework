@@ -1,39 +1,46 @@
-# Current Context — Silver-first Toolkit
+# Current Context — Enterprise Snowflake Data Project Toolkit
 
 Updated: 2026-09-09
 
 ## Canonical direction
 
-The Framework is being simplified from a dbt runtime abstraction into a project toolkit.
+```text
+Framework owns project creation.
+Domain repositories own project evolution.
+```
+
+The Framework is a Python project toolkit, not a runtime abstraction. The canonical data boundary is:
 
 ```text
-Source -> ingestion -> BRONZE
+Source -> Ingestion -> BRONZE
 BRONZE -> explicit domain-owned Snowflake SQL -> SILVER
 SILVER -> dbt -> GOLD -> SEMANTIC
 ```
 
-The design priority is local readability: a domain engineer should not need to open this repository to understand how a production SCD pipeline behaves.
+Source system is the long-lived organization boundary across `config/sources`, `contracts/raw`, `ingestion`, and `silver_processing`.
 
-## Removed runtime concepts
+## Ownership guardrail
 
-The current simplification removes the shared dbt package, `esf_apply_dataset_config`, custom SCD1/SCD2 dbt materializations, dataset materialization/runtime routing, dbt vars rendering and the mixed-strategy dbt runtime example.
+Scaffolding is append-only at dataset-directory level. Once `silver_processing/<source>/<dataset>/` exists, it belongs to the domain repository forever. `esf scaffold` and `esf scaffold-all` never overwrite or repair it, and there is no `--force` escape hatch.
 
 ## Retained reusable capabilities
 
-- project/RAW/Silver contract validation;
-- one-time pattern scaffolding;
+- project/source/RAW/Silver contract validation;
+- `esf init-project` and `esf add-source`;
+- read-only `esf plan`;
+- one-time `esf scaffold` / `esf scaffold-all`;
 - workspace/query-tag utilities;
 - reusable CI/deployment workflows;
-- reference patterns and static checks.
+- reference patterns and static tests.
+
+## Removed runtime concepts
+
+There is no shared dbt package, custom SCD materialization, metadata runtime routing, connector state, central SCD runtime engine, or deployment-time SQL generation.
 
 ## Deployment model
 
-Domain repositories commit an ordered `silver_processing/deploy_manifest.txt`. The reusable deployment workflow validates the project, executes those committed SQL files in order, then runs ordinary dbt from trusted Silver into Gold/Semantic.
-
-## Platform boundary
-
-`PLATFORM_CONTROL` remains separate and guarded. Connector-specific positions remain outside this toolkit. Processing reset preserves Bronze evidence and rebuilds reconstructable processing outputs.
+Domain repositories commit an ordered `silver_processing/deploy_manifest.txt`. The reusable workflow validates the project, executes those committed SQL files in order, then runs ordinary dbt from trusted Silver into Gold/Semantic.
 
 ## Proof boundary
 
-Repository/static implementation does not equal live Snowflake proof. DEV WIF, actual Snowflake execution, cross-domain denial, live SCD scenarios and promotion still require the platform live-acceptance gate.
+Repository/static CI does not equal live Snowflake proof. DEV WIF, actual Snowflake execution, cross-domain denial, live SCD scenarios and promotion still require a configured live-acceptance gate.
