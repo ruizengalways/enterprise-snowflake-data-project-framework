@@ -4,9 +4,9 @@
   "title": "Enterprise Snowflake Silver Pipeline Contract v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "pipeline"],
+  "required": ["schema_version", "pipeline"],
   "properties": {
-    "version": {"const": 1},
+    "schema_version": {"const": 1},
     "pipeline": {
       "type": "object",
       "additionalProperties": false,
@@ -14,21 +14,17 @@
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$"},
         "pattern": {"enum": ["append", "full_refresh", "scd1", "scd2", "custom"]},
-        "raw_contract": {"type": "string", "pattern": "^contracts/raw/[A-Za-z0-9_.-]+\\.ya?ml$"},
+        "raw_contract": {"type": "string", "pattern": "^contracts/raw/[a-z][a-z0-9_]*/[A-Za-z0-9_.-]+\\.ya?ml$"},
         "input": {"type": "object", "additionalProperties": false, "required": ["relation"], "properties": {"relation": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*\\.[A-Z][A-Z0-9_]*$"}}},
         "output": {"type": "object", "additionalProperties": false, "properties": {"relation": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*\\.[A-Z][A-Z0-9_]*$"}, "current": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*\\.[A-Z][A-Z0-9_]*$"}, "history": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*\\.[A-Z][A-Z0-9_]*$"}}},
-        "business_key": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
-        "event_order": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
-        "idempotency_key": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
-        "effective_at": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
-        "tracked_columns": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
-        "delete": {"type": "object", "additionalProperties": false, "required": ["column", "values"], "properties": {"column": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}, "values": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 64}}}}
+        "tracked_columns": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}}
       },
       "allOf": [
-        {"if": {"properties": {"pattern": {"const": "append"}}, "required": ["pattern"]}, "then": {"required": ["idempotency_key"], "properties": {"output": {"required": ["relation"]}}}},
+        {"if": {"properties": {"pattern": {"const": "append"}}, "required": ["pattern"]}, "then": {"properties": {"output": {"required": ["relation"]}}}},
         {"if": {"properties": {"pattern": {"const": "full_refresh"}}, "required": ["pattern"]}, "then": {"properties": {"output": {"required": ["relation"]}}}},
-        {"if": {"properties": {"pattern": {"const": "scd1"}}, "required": ["pattern"]}, "then": {"required": ["business_key", "event_order"], "properties": {"output": {"required": ["current"]}}}},
-        {"if": {"properties": {"pattern": {"const": "scd2"}}, "required": ["pattern"]}, "then": {"required": ["business_key", "event_order", "idempotency_key", "effective_at", "tracked_columns"], "properties": {"output": {"required": ["history", "current"]}}}}
+        {"if": {"properties": {"pattern": {"const": "custom"}}, "required": ["pattern"]}, "then": {"properties": {"output": {"required": ["relation"]}}}},
+        {"if": {"properties": {"pattern": {"const": "scd1"}}, "required": ["pattern"]}, "then": {"properties": {"output": {"required": ["current"]}}}},
+        {"if": {"properties": {"pattern": {"const": "scd2"}}, "required": ["pattern"]}, "then": {"required": ["tracked_columns"], "properties": {"output": {"required": ["history", "current"]}}}}
       ]
     }
   }

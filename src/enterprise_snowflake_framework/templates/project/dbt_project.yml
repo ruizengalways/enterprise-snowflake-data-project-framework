@@ -1,0 +1,11 @@
+name: '__PROJECT_CODE_LOWER__'
+version: '1.0.0'
+config-version: 2
+profile: '__PROJECT_CODE_LOWER__'
+model-paths: ['models']
+test-paths: ['tests']
+clean-targets: ['target', 'dbt_packages']
+
+models:
+  __PROJECT_CODE_LOWER__:
+    +materialized: view
