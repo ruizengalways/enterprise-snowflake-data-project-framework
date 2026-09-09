@@ -9,6 +9,7 @@ import yaml
 from .pipeline_sql import (
     build_names,
     render_apply_sql,
+    render_compare_sql,
     render_deploy_fragment,
     render_objects_sql,
     render_publish_sql,
@@ -201,6 +202,7 @@ def render_implementation_files(
         "010_apply.sql": render_apply_sql(pattern, names, contract),
         "015_replay.sql": render_replay_sql(pattern, names, contract),
         "020_validate.sql": render_validate_sql(pattern, names, contract),
+        "025_compare.sql": render_compare_sql(pattern, names, contract, candidate=candidate),
         "030_task.sql": render_task_sql(pattern, names, _project_code(project_root)),
         "040_register.sql": render_register_sql(pattern, names, owner=owner, candidate=candidate),
         "050_publish.sql": render_publish_sql(pattern, names, candidate=candidate),

@@ -13,6 +13,7 @@ STANDARD_DATASET_FILES = (
     "010_apply.sql",
     "015_replay.sql",
     "020_validate.sql",
+    "025_compare.sql",
     "030_task.sql",
     "040_register.sql",
     "050_publish.sql",

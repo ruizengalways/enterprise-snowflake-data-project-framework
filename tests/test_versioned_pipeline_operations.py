@@ -73,8 +73,7 @@ class VersionedPipelineOperationTests(unittest.TestCase):
         add_source(self.root, source)
         raw_root = self.root / "contracts" / "raw" / source
         raw_root.mkdir(parents=True, exist_ok=True)
-        raw_path = raw_root / "customer.yml"
-        raw_path.write_text(RAW_TEMPLATE.format(source=source), encoding="utf-8")
+        (raw_root / "customer.yml").write_text(RAW_TEMPLATE.format(source=source), encoding="utf-8")
         manifest = {
             "schema_version": 1,
             "source": {"id": source, "owner": "transport"},
@@ -105,9 +104,9 @@ class VersionedPipelineOperationTests(unittest.TestCase):
         self.assertFalse(result.domain_owned)
         self.assertFalse(destination.exists())
         self.assertIn("010_apply.sql", result.files)
+        self.assertIn("025_compare.sql", result.files)
         self.assertIn("BRONZE.FLEET_MSSQL_CUSTOMER", result.rendered["pipeline.yml"])
         self.assertIn("SILVER.FLEET_MSSQL_CUSTOMER_HISTORY", result.rendered["pipeline.yml"])
-        self.assertIn("WILL", "WILL")
 
     def test_v1_scaffold_generates_explicit_operational_pipeline(self) -> None:
         destination = self._scaffold_v1()
@@ -119,6 +118,7 @@ class VersionedPipelineOperationTests(unittest.TestCase):
             "010_apply.sql",
             "015_replay.sql",
             "020_validate.sql",
+            "025_compare.sql",
             "030_task.sql",
             "040_register.sql",
             "050_publish.sql",
@@ -130,6 +130,7 @@ class VersionedPipelineOperationTests(unittest.TestCase):
         task_sql = (destination / "030_task.sql").read_text(encoding="utf-8")
         publish = (destination / "050_publish.sql").read_text(encoding="utf-8")
         register = (destination / "040_register.sql").read_text(encoding="utf-8")
+        compare = (destination / "025_compare.sql").read_text(encoding="utf-8")
         self.assertIn("FLEET_MSSQL_CUSTOMER_V1_HISTORY", objects)
         self.assertIn("FLEET_MSSQL_CUSTOMER_V1_CURRENT", objects)
         self.assertIn("IS_ACTIVE = TRUE", objects)
@@ -138,6 +139,7 @@ class VersionedPipelineOperationTests(unittest.TestCase):
         self.assertIn("WH_TRANSPORT_TRANSFORM", task_sql)
         self.assertIn("SILVER.FLEET_MSSQL_CUSTOMER_CURRENT", publish)
         self.assertIn("CONTROL.DATASET_VERSION", register)
+        self.assertIn("initial implementation has no prior active version", compare)
 
     def test_candidate_is_independent_and_never_rewrites_v1(self) -> None:
         destination = self._scaffold_v1()
@@ -160,6 +162,10 @@ class VersionedPipelineOperationTests(unittest.TestCase):
             "Candidate v2 is intentionally not published",
             (result.destination / "050_publish.sql").read_text(encoding="utf-8"),
         )
+        compare = (result.destination / "025_compare.sql").read_text(encoding="utf-8")
+        self.assertIn("CONTROL.VERSION_VALIDATION", compare)
+        self.assertIn("SILVER.FLEET_MSSQL_CUSTOMER_CURRENT", compare)
+        self.assertIn("SILVER.FLEET_MSSQL_CUSTOMER_V2_CURRENT", compare)
         marker = result.destination / "010_apply.sql"
         marker.write_text("-- DOMAIN V2 CUSTOM\n", encoding="utf-8")
         repeated = scaffold_version(

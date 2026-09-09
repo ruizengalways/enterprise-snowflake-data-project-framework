@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .pipeline_apply import render_apply_sql
+from .pipeline_compare import render_compare_sql
 from .pipeline_model import PipelineNames, build_names
 from .pipeline_objects import render_objects_sql, render_validate_sql
 from .pipeline_operations import (
@@ -17,6 +18,7 @@ __all__ = [
     "PipelineNames",
     "build_names",
     "render_apply_sql",
+    "render_compare_sql",
     "render_deploy_fragment",
     "render_objects_sql",
     "render_publish_sql",
