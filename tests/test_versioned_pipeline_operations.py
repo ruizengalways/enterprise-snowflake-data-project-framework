@@ -105,6 +105,7 @@ class VersionedPipelineOperationTests(unittest.TestCase):
         self.assertFalse(destination.exists())
         self.assertIn("010_apply.sql", result.files)
         self.assertIn("025_compare.sql", result.files)
+        self.assertIn("060_policy.sql", result.files)
         self.assertIn("BRONZE.FLEET_MSSQL_CUSTOMER", result.rendered["pipeline.yml"])
         self.assertIn("SILVER.FLEET_MSSQL_CUSTOMER_HISTORY", result.rendered["pipeline.yml"])
 
@@ -122,6 +123,7 @@ class VersionedPipelineOperationTests(unittest.TestCase):
             "030_task.sql",
             "040_register.sql",
             "050_publish.sql",
+            "060_policy.sql",
             "deploy_manifest.fragment.txt",
         }
         self.assertEqual(expected, {path.name for path in destination.iterdir() if path.is_file()})
@@ -131,6 +133,7 @@ class VersionedPipelineOperationTests(unittest.TestCase):
         publish = (destination / "050_publish.sql").read_text(encoding="utf-8")
         register = (destination / "040_register.sql").read_text(encoding="utf-8")
         compare = (destination / "025_compare.sql").read_text(encoding="utf-8")
+        policy = (destination / "060_policy.sql").read_text(encoding="utf-8")
         self.assertIn("FLEET_MSSQL_CUSTOMER_V1_HISTORY", objects)
         self.assertIn("FLEET_MSSQL_CUSTOMER_V1_CURRENT", objects)
         self.assertIn("IS_ACTIVE = TRUE", objects)
@@ -140,6 +143,8 @@ class VersionedPipelineOperationTests(unittest.TestCase):
         self.assertIn("SILVER.FLEET_MSSQL_CUSTOMER_CURRENT", publish)
         self.assertIn("CONTROL.DATASET_VERSION", register)
         self.assertIn("initial implementation has no prior active version", compare)
+        self.assertIn("No threshold is guessed by the framework", policy)
+        self.assertIn("esf sla-sql", policy)
 
     def test_candidate_is_independent_and_never_rewrites_v1(self) -> None:
         destination = self._scaffold_v1()
@@ -161,6 +166,10 @@ class VersionedPipelineOperationTests(unittest.TestCase):
         self.assertIn(
             "Candidate v2 is intentionally not published",
             (result.destination / "050_publish.sql").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "SLA belongs to the logical dataset",
+            (result.destination / "060_policy.sql").read_text(encoding="utf-8"),
         )
         compare = (result.destination / "025_compare.sql").read_text(encoding="utf-8")
         self.assertIn("CONTROL.VERSION_VALIDATION", compare)

@@ -17,15 +17,6 @@ enterprise-snowflake-transport-analytics
 
 A domain may contain many sources. The source boundary is preserved in repository paths and in newly generated Snowflake object names so same-named datasets from different sources cannot collide by default.
 
-Example new naming:
-
-```text
-fleet_mssql.customer
-  -> BRONZE.FLEET_MSSQL_CUSTOMER
-  -> SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY
-  -> SILVER.FLEET_MSSQL_CUSTOMER_CURRENT
-```
-
 Existing domain-owned pipelines are not renamed automatically.
 
 ## Ingestion
@@ -57,8 +48,11 @@ version.yml
 030_task.sql
 040_register.sql
 050_publish.sql
+060_policy.sql
 deploy_manifest.fragment.txt
 ```
+
+`060_policy.sql` is a commented logical-dataset SLA starter. The framework never guesses operational thresholds.
 
 ## Domain-local control plane
 
@@ -66,22 +60,11 @@ Each domain owns its own `CONTROL` schema. Do not create one shared writable `PL
 
 The domain control plane includes dataset/version identity, SLA policy, ingestion/pipeline/dbt run evidence, health state, incidents, version validation and repair audit. Enterprise health dashboards may union stable read-only health views from each domain.
 
+Control-plane upgrades remain explicit. Rerunning `init-project` creates newly introduced missing control files without overwriting existing files or the domain-owned deploy manifest. `esf control-plan` reports repo/manifest gaps for review.
+
 ## SCD2 default
 
 The default SCD2 model is one physical history table per implementation version. Current state is `IS_ACTIVE = TRUE` and is exposed through a version-local current view plus a stable published current view.
-
-Example:
-
-```text
-SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY
-SILVER.FLEET_MSSQL_CUSTOMER_V1_CURRENT
-SILVER.FLEET_MSSQL_CUSTOMER_V2_HISTORY
-SILVER.FLEET_MSSQL_CUSTOMER_V2_CURRENT
-
-published:
-SILVER.FLEET_MSSQL_CUSTOMER_HISTORY
-SILVER.FLEET_MSSQL_CUSTOMER_CURRENT
-```
 
 A separate physical current table is optional and should be justified by performance evidence.
 
@@ -107,7 +90,23 @@ scaffold -> deploy -> replay/bootstrap -> catch up -> shadow -> validate -> comp
 
 ## SLA and observability
 
-SLA is per logical dataset and may be stage-specific. Latency and freshness are separate metrics. Cadence can be continuous, interval or scheduled-deadline. Domain run ledgers feed `CONTROL.DATASET_HEALTH` and dashboard-ready views.
+SLA belongs to the logical dataset, not to the source manifest and not to an implementation version. Git stores reviewed policy-change SQL; `CONTROL.SLA_POLICY` stores the currently effective policy used by Snowflake health evaluation.
+
+Supported cadence types are:
+
+```text
+CONTINUOUS
+INTERVAL
+SCHEDULED_DEADLINE
+```
+
+Latency and freshness remain separate metrics. Stage policy can cover Source -> Bronze, Bronze -> Silver, Silver -> Gold and end-to-end freshness.
+
+`CONTROL.SLA_EVALUATION_V` evaluates current policy and `CONTROL.EVALUATE_DOMAIN_HEALTH()` refreshes dataset health plus automatic incident lifecycle. Automatic incidents currently cover ingestion failure, pipeline failure, dbt failure and SLA violations. A sustained condition reuses one open incident key; recovery resolves that incident instead of creating repeated rows.
+
+`CONTROL.EVALUATE_DOMAIN_HEALTH_TASK` is a domain-local one-minute serverless task. It is created suspended and must be explicitly resumed after validation.
+
+Use `esf sla-sql` to generate a new reviewable policy revision under `operations/sla/`. The command never connects to Snowflake and never overwrites an existing revision file.
 
 ## Repair
 
@@ -119,7 +118,7 @@ Repair begins at the latest correct layer:
 
 Replay, backfill and reset remain distinct operations.
 
-`repair-plan` is read-only. `repair-sql` currently generates explicit SCD2 candidate replay SQL for engineer review/execution and does not modify active production objects.
+`repair-plan` is read-only. `repair-sql` generates explicit SCD2 candidate replay SQL for engineer review/execution and does not modify active production objects.
 
 ## Gold / KPI / Semantic
 
@@ -136,6 +135,7 @@ Continue to reject:
 - universal ingestion orchestration
 - hidden active-version switching
 - automatic production repair execution
+- automatic SLA threshold inference
 - automatic business Mart/KPI/Semantic generation
 
 The control plane may centralize operational health/version/incident logic inside a domain, but must not hide dataset transformation behavior.

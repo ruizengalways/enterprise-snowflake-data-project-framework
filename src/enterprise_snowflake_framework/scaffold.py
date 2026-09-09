@@ -12,6 +12,7 @@ from .pipeline_sql import (
     render_compare_sql,
     render_deploy_fragment,
     render_objects_sql,
+    render_policy_sql,
     render_publish_sql,
     render_register_sql,
     render_replay_sql,
@@ -206,6 +207,7 @@ def render_implementation_files(
         "030_task.sql": render_task_sql(pattern, names, _project_code(project_root)),
         "040_register.sql": render_register_sql(pattern, names, owner=owner, candidate=candidate),
         "050_publish.sql": render_publish_sql(pattern, names, candidate=candidate),
+        "060_policy.sql": render_policy_sql(names, candidate=candidate),
         "deploy_manifest.fragment.txt": render_deploy_fragment(names, candidate=candidate),
     }
     if include_pipeline:

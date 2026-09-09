@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .control_plan import build_control_plan
 from .init_project import initialize_project
 from .plan import SourcePlan, build_source_plan
 from .repair import PROBLEM_LAYERS, build_repair_plan, generate_silver_repair_scripts
@@ -12,6 +13,7 @@ from .scaffold import (
     scaffold_pipeline,
     scaffold_preview,
 )
+from .sla_policy import CADENCE_TYPES, SLA_STAGES, generate_sla_sql
 from .source_management import add_source
 from .validation import validate_project_tree
 from .versioning import generate_release_scripts, scaffold_version
@@ -41,6 +43,12 @@ def _build_parser() -> argparse.ArgumentParser:
     plan = subparsers.add_parser("plan", help="Show append-only scaffold actions without writing files.")
     plan.add_argument("--source", required=True, dest="source_id")
     plan.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    control_plan = subparsers.add_parser(
+        "control-plan",
+        help="Show domain control-plane upgrade/deploy-manifest gaps without modifying the repository.",
+    )
+    control_plan.add_argument("--project-root", type=Path, default=Path.cwd())
 
     preview = subparsers.add_parser(
         "scaffold-preview", help="Render a new dataset starter in memory without writing files."
@@ -72,6 +80,24 @@ def _build_parser() -> argparse.ArgumentParser:
     scaffold_version_parser.add_argument("version")
     scaffold_version_parser.add_argument("--source", required=True, dest="source_id")
     scaffold_version_parser.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    sla_sql = subparsers.add_parser(
+        "sla-sql",
+        help="Generate an explicit logical-dataset SLA policy revision for review; never execute it.",
+    )
+    sla_sql.add_argument("dataset_id")
+    sla_sql.add_argument("policy_id")
+    sla_sql.add_argument("--source", required=True, dest="source_id")
+    sla_sql.add_argument("--stage", required=True, type=str.upper, choices=sorted(SLA_STAGES))
+    sla_sql.add_argument("--cadence", required=True, type=str.upper, choices=sorted(CADENCE_TYPES))
+    sla_sql.add_argument("--max-latency-seconds", type=int)
+    sla_sql.add_argument("--max-freshness-seconds", type=int)
+    sla_sql.add_argument("--expected-interval-seconds", type=int)
+    sla_sql.add_argument("--deadline-local-time")
+    sla_sql.add_argument("--timezone")
+    sla_sql.add_argument("--disabled", action="store_true")
+    sla_sql.add_argument("--output-root", type=Path)
+    sla_sql.add_argument("--project-root", type=Path, default=Path.cwd())
 
     repair_plan = subparsers.add_parser(
         "repair-plan", help="Explain the repair path without writing files or executing Snowflake SQL."
@@ -136,6 +162,38 @@ def _print_plan(plan: SourcePlan) -> None:
     print("  0")
 
 
+def _print_control_plan(project_root: Path) -> None:
+    plan = build_control_plan(project_root)
+    print(f"Control manifest: {plan.manifest}")
+    print(f"Ready: {'YES' if plan.ready else 'NO'}")
+    print()
+    print("KNOWN FILES PRESENT")
+    for path in plan.known_files_present:
+        print(f"  {path}")
+    if not plan.known_files_present:
+        print("  0")
+    print()
+    print("MISSING FROM REPO")
+    for path in plan.known_files_missing:
+        print(f"  {path}")
+    if not plan.known_files_missing:
+        print("  0")
+    print()
+    print("MISSING FROM DEPLOY MANIFEST")
+    for path in plan.missing_from_manifest:
+        print(f"  {path}")
+    if not plan.missing_from_manifest:
+        print("  0")
+    print()
+    print("DOMAIN-OWNED / UNKNOWN MANIFEST ENTRIES")
+    for path in plan.unknown_manifest_entries:
+        print(f"  {path}")
+    if not plan.unknown_manifest_entries:
+        print("  0")
+    print()
+    print("No files changed.")
+
+
 def main() -> None:
     args = _build_parser().parse_args()
     try:
@@ -157,6 +215,10 @@ def main() -> None:
 
         if args.command == "plan":
             _print_plan(build_source_plan(args.project_root, args.source_id))
+            return
+
+        if args.command == "control-plan":
+            _print_control_plan(args.project_root)
             return
 
         if args.command == "scaffold-preview":
@@ -219,6 +281,29 @@ def main() -> None:
                 f"Created candidate: {result.destination}"
                 if result.created
                 else f"SKIPPED / VERSION OWNED: {result.destination}. No files changed."
+            )
+            return
+
+        if args.command == "sla-sql":
+            result = generate_sla_sql(
+                project_root=args.project_root,
+                source_id=args.source_id,
+                dataset_id=args.dataset_id,
+                policy_id=args.policy_id,
+                stage=args.stage,
+                cadence_type=args.cadence,
+                max_latency_seconds=args.max_latency_seconds,
+                max_freshness_seconds=args.max_freshness_seconds,
+                expected_interval_seconds=args.expected_interval_seconds,
+                deadline_local_time=args.deadline_local_time,
+                timezone=args.timezone,
+                enabled=not args.disabled,
+                output_root=args.output_root,
+            )
+            print(
+                f"Generated SLA policy SQL: {result.destination}"
+                if result.created
+                else f"SKIPPED / SLA POLICY OWNED: {result.destination}. No files changed."
             )
             return
 
