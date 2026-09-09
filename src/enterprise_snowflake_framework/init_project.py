@@ -38,6 +38,7 @@ PROJECT_TEMPLATE_FILES = {
     "README.md": "README.md",
     "ingestion/README.md": "ingestion_README.md",
     "control_plane/README.md": "control_plane_README.md",
+    "control_plane/deploy_manifest.txt": "control_plane_deploy_manifest.txt",
     "control_plane/sql/001_objects.sql": "control_plane_001_objects.sql",
     "control_plane/sql/010_observability_views.sql": "control_plane_010_observability_views.sql",
     "control_plane/sql/020_refresh_health.sql": "control_plane_020_refresh_health.sql",

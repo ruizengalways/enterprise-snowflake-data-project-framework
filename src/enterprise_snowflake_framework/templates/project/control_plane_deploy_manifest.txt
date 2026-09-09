@@ -1,0 +1,4 @@
+# Domain-local control-plane SQL. Executed in committed order before Silver deployment.
+control_plane/sql/001_objects.sql
+control_plane/sql/010_observability_views.sql
+control_plane/sql/020_refresh_health.sql
