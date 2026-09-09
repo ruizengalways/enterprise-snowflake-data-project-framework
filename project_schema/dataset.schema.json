@@ -1,167 +1,120 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://enterprise-snowflake.example/schemas/dataset.schema.json",
-  "title": "Enterprise Snowflake Dataset Metadata",
+  "title": "Enterprise Snowflake Dataset Metadata v2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "dataset"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "dataset": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "owner_team", "raw_contract", "load_strategy", "implementation"],
+      "required": ["id", "materialization", "runtime"],
       "properties": {
-        "id": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_]{1,63}$"
-        },
-        "owner_team": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "raw_contract": {
-          "type": "string",
-          "pattern": "^contracts/raw/[A-Za-z0-9_.-]+\\.ya?ml$"
-        },
-        "load_strategy": {
-          "enum": [
-            "full_refresh",
-            "append_only",
-            "incremental_merge",
-            "scd1_merge",
-            "scd2_snapshot",
-            "scd2_merge",
-            "scd2_stream_task"
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$"},
+        "owner_team": {"type": "string", "minLength": 1, "maxLength": 128},
+        "raw_contract": {"type": "string", "pattern": "^contracts/raw/[A-Za-z0-9_.-]+\\.ya?ml$"},
+        "load": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["strategy"],
+          "properties": {
+            "strategy": {"enum": ["full_refresh", "append_only", "incremental_merge", "scd1", "scd2", "custom"]},
+            "business_key": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
+            "watermark_column": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+            "scd2": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["effective_at_column", "order_columns", "tracked_columns", "late_arrival"],
+              "properties": {
+                "effective_at_column": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+                "order_columns": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
+                "tracked_columns": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
+                "delete": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["operation_column", "values"],
+                  "properties": {
+                    "operation_column": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+                    "values": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 64}}
+                  }
+                },
+                "late_arrival": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["strategy"],
+                  "properties": {"strategy": {"const": "rebuild_affected_keys"}}
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"strategy": {"enum": ["incremental_merge", "scd1", "scd2"]}}, "required": ["strategy"]},
+              "then": {"required": ["business_key"]}
+            },
+            {
+              "if": {"properties": {"strategy": {"const": "scd2"}}, "required": ["strategy"]},
+              "then": {"required": ["scd2"]}
+            }
           ]
         },
-        "implementation": {
-          "enum": ["standard", "custom"]
-        },
-        "business_key": {
-          "type": "array",
-          "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
-          "uniqueItems": true,
-          "minItems": 1
-        },
-        "watermark_column": {
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-        },
-        "scd2": {
+        "materialization": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["tracked_columns"],
+          "required": ["type"],
           "properties": {
-            "effective_at_column": {
-              "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-            },
-            "order_columns": {
-              "type": "array",
-              "minItems": 1,
-              "uniqueItems": true,
-              "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
-            },
-            "tracked_columns": {
-              "type": "array",
-              "minItems": 1,
-              "uniqueItems": true,
-              "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
-            },
-            "operation_column": {
-              "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-            },
-            "delete_values": {
-              "type": "array",
-              "minItems": 1,
-              "uniqueItems": true,
-              "items": {"type": "string", "minLength": 1, "maxLength": 64}
-            },
-            "late_arriving_policy": {
-              "enum": ["rebuild_affected_keys"]
+            "type": {"enum": ["table", "view", "dynamic_table", "snapshot", "custom"]},
+            "target_lag": {"type": "string", "minLength": 1, "maxLength": 64},
+            "refresh_mode": {"enum": ["adaptive", "incremental", "full"]}
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"type": {"const": "dynamic_table"}}, "required": ["type"]},
+              "then": {"required": ["target_lag"]}
             }
-          }
+          ]
         },
-        "freshness": {
+        "runtime": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["warn_after_minutes", "error_after_minutes"],
+          "required": ["mode"],
           "properties": {
-            "warn_after_minutes": {"type": "integer", "minimum": 1},
-            "error_after_minutes": {"type": "integer", "minimum": 1}
+            "mode": {"enum": ["dbt", "snowflake_managed", "task", "stream_task", "external", "custom"]},
+            "schedule": {"type": "string", "minLength": 1, "maxLength": 256}
           }
         },
-        "reconciliation": {
+        "compute": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["enabled"],
+          "properties": {"workload": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$"}}
+        },
+        "quality": {
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "enabled": {"type": "boolean"},
-            "measures": {
-              "type": "array",
-              "uniqueItems": true,
-              "items": {
-                "enum": [
-                  "row_count",
-                  "distinct_business_key",
-                  "min_max_source_timestamp"
-                ]
+            "freshness": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["warn_after_minutes", "error_after_minutes"],
+              "properties": {
+                "warn_after_minutes": {"type": "integer", "minimum": 1},
+                "error_after_minutes": {"type": "integer", "minimum": 1}
+              }
+            },
+            "reconciliation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled"],
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "measures": {"type": "array", "uniqueItems": true, "items": {"enum": ["row_count", "distinct_business_key", "min_max_source_timestamp"]}}
               }
             }
           }
         }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "load_strategy": {"const": "scd1_merge"}
-            },
-            "required": ["load_strategy"]
-          },
-          "then": {
-            "required": ["business_key"]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "load_strategy": {
-                "enum": ["scd2_snapshot", "scd2_merge", "scd2_stream_task"]
-              }
-            },
-            "required": ["load_strategy"]
-          },
-          "then": {
-            "required": ["scd2"]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "load_strategy": {
-                "enum": ["scd2_merge", "scd2_stream_task"]
-              }
-            },
-            "required": ["load_strategy"]
-          },
-          "then": {
-            "properties": {
-              "scd2": {
-                "required": [
-                  "effective_at_column",
-                  "order_columns",
-                  "tracked_columns",
-                  "late_arriving_policy"
-                ]
-              }
-            }
-          }
-        }
-      ]
+      }
     }
   }
 }
