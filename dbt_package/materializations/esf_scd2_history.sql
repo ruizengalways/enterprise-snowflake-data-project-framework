@@ -211,9 +211,11 @@ from intervalized
 where not _esf_is_delete
     {%- endcall %}
 
-    {% call statement('main') -%}
-begin transaction;
+    {% call statement('begin_transaction') -%}
+begin transaction
+    {%- endcall %}
 
+    {% call statement('append_new_events') -%}
 insert into {{ event_relation }}
 select staged.*
 from {{ stage_relation }} as staged
@@ -223,22 +225,32 @@ where not exists (
     select 1
     from {{ event_relation }} as existing
     where {{ enterprise_snowflake_framework.esf_equal_keys('existing', 'staged', keys + ordering) }}
-);
-
-delete from {{ target_relation }} as history
-using {{ affected_relation }} as affected
-where {{ enterprise_snowflake_framework.esf_equal_keys('history', 'affected', keys) }};
-
-insert into {{ target_relation }}
-select * from {{ rebuild_relation }};
-
-commit;
+)
     {%- endcall %}
 
-    {% call statement('cleanup') -%}
-drop table if exists {{ stage_relation }};
-drop table if exists {{ affected_relation }};
-drop table if exists {{ rebuild_relation }};
+    {% call statement('replace_affected_history_delete') -%}
+delete from {{ target_relation }} as history
+using {{ affected_relation }} as affected
+where {{ enterprise_snowflake_framework.esf_equal_keys('history', 'affected', keys) }}
+    {%- endcall %}
+
+    {% call statement('replace_affected_history_insert') -%}
+insert into {{ target_relation }}
+select * from {{ rebuild_relation }}
+    {%- endcall %}
+
+    {% call statement('commit_transaction') -%}
+commit
+    {%- endcall %}
+
+    {% call statement('drop_stage') -%}
+drop table if exists {{ stage_relation }}
+    {%- endcall %}
+    {% call statement('drop_affected') -%}
+drop table if exists {{ affected_relation }}
+    {%- endcall %}
+    {% call statement('drop_rebuild') -%}
+drop table if exists {{ rebuild_relation }}
     {%- endcall %}
 
     {{ return({'relations': [target_relation]}) }}
