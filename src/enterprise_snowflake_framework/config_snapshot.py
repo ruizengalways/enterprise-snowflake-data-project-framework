@@ -10,13 +10,10 @@ _DATASET_KEYS = (
     "owner_team",
     "raw_contract",
     "load",
-    "load_strategy",
-    "implementation",
-    "business_key",
-    "watermark_column",
-    "scd2",
-    "freshness",
-    "reconciliation",
+    "materialization",
+    "runtime",
+    "compute",
+    "quality",
 )
 _SOURCE_CONTRACT_KEYS = (
     "source_system",
@@ -33,7 +30,6 @@ _SOURCE_CONTRACT_KEYS = (
 
 
 def canonical_json(value: object) -> str:
-    """Serialize machine configuration deterministically for audit hashing."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -42,27 +38,25 @@ def sha256_hex(value: str) -> str:
 
 
 def build_dataset_config_snapshot(
-    dataset_document: Mapping[str, Any],
-    raw_contract_document: Mapping[str, Any],
+    dataset_document: Mapping[str, Any], raw_contract_document: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Build a bounded, deterministic snapshot of Git-owned technical metadata.
-
-    Runtime context such as run_id/query_tag is deliberately excluded. The
-    snapshot records only validated configuration that should be reproducible
-    from a Git revision. Both schema v1 and v2 are supported during migration.
-    """
+    """Snapshot Git-owned processing config; runtime state and connector checkpoints are excluded."""
+    if dataset_document.get("schema_version") != 2:
+        raise ValueError("dataset config snapshots require schema_version 2")
     dataset = dataset_document["dataset"]
-    contract = raw_contract_document["contract"]
-    payload = {
+    payload: dict[str, Any] = {
         "dataset": {key: dataset[key] for key in _DATASET_KEYS if key in dataset},
-        "source_contract": {
-            key: contract[key] for key in _SOURCE_CONTRACT_KEYS if key in contract
-        },
-        "raw_contract_schema_version": raw_contract_document["schema_version"],
+        "dataset_schema_version": 2,
     }
+    if raw_contract_document is not None:
+        contract = raw_contract_document["contract"]
+        payload["source_contract"] = {
+            key: contract[key] for key in _SOURCE_CONTRACT_KEYS if key in contract
+        }
+        payload["raw_contract_schema_version"] = raw_contract_document["schema_version"]
     config_json = canonical_json(payload)
     return {
-        "config_schema_version": dataset_document["schema_version"],
+        "config_schema_version": 2,
         "config_hash": sha256_hex(config_json),
         "config_json": config_json,
     }

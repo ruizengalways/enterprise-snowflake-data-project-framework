@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config_snapshot import build_dataset_config_snapshot
-from .dataset_metadata import legacy_dataset_view, normalize_dataset_document
+from .dataset_metadata import canonical_dataset
 from .metadata_validation import MetadataValidationError, load_document, validate_project_tree
 from .query_tags import build_query_tag
 
@@ -16,16 +16,7 @@ def build_dbt_vars(
     *,
     query_context: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
-    """Build the bounded technical metadata exposed to dbt macros.
-
-    Validation runs first so dbt never receives a partially valid metadata tree.
-    Static Git configuration snapshots are produced separately from runtime
-    query context so run IDs/query tags never change the deployment audit hash.
-    Arbitrary SQL/business-rule fields are never exposed through this bridge.
-
-    Dataset schema v2 is canonical. A small set of legacy flat aliases remains
-    during migration so existing projects do not need a flag-day upgrade.
-    """
+    """Expose bounded technical metadata to dbt without compatibility aliases or business SQL."""
     project_root = project_root.resolve()
     errors = validate_project_tree(project_root, schema_dir.resolve())
     if errors:
@@ -36,43 +27,26 @@ def build_dbt_vars(
     snapshots: dict[str, dict[str, Any]] = {}
 
     for path in sorted((project_root / "config" / "datasets").glob("*.y*ml")):
-        dataset_document = load_document(path)
-        canonical = normalize_dataset_document(dataset_document)
-        legacy = legacy_dataset_view(canonical)
-        dataset_id = canonical["id"]
-        raw_contract_document = load_document(project_root / canonical["raw_contract"])
-        raw_contract = raw_contract_document["contract"]
+        document = load_document(path)
+        dataset = canonical_dataset(document)
+        dataset_id = dataset["id"]
+        raw_document = None
+        raw_contract = None
+        if dataset.get("raw_contract"):
+            raw_document = load_document(project_root / dataset["raw_contract"])
+            raw_contract = raw_document["contract"]
 
-        technical: dict[str, Any] = {
-            "schema_version": dataset_document["schema_version"],
-            "id": canonical["id"],
-            "owner_team": canonical["owner_team"],
-            "raw_contract": canonical["raw_contract"],
-            "load": canonical["load"],
-        }
-        for key in ("freshness", "reconciliation"):
-            if key in canonical:
-                technical[key] = canonical[key]
+        technical: dict[str, Any] = {"schema_version": 2, **dataset}
+        if raw_contract:
+            technical["source_system"] = raw_contract["source_system"]
+            technical["source_contract"] = {
+                "grain": raw_contract["grain"],
+                "business_key": raw_contract["business_key"],
+                "source_timestamp": raw_contract.get("source_timestamp"),
+                "change_semantics": raw_contract["change_semantics"],
+            }
 
-        # Temporary compatibility aliases. New macros should use `load`.
-        for key in (
-            "load_strategy",
-            "implementation",
-            "business_key",
-            "watermark_column",
-            "scd2",
-        ):
-            if key in legacy:
-                technical[key] = legacy[key]
-
-        technical["source_system"] = raw_contract["source_system"]
-        if raw_contract.get("capture"):
-            technical["capture"] = raw_contract["capture"]
-
-        snapshots[dataset_id] = build_dataset_config_snapshot(
-            dataset_document,
-            raw_contract_document,
-        )
+        snapshots[dataset_id] = build_dataset_config_snapshot(document, raw_document)
 
         if query_context is not None:
             technical["query_tag"] = build_query_tag(
@@ -80,7 +54,7 @@ def build_dbt_vars(
                     "project": project["code"].lower(),
                     "environment": query_context.get("environment"),
                     "workload": query_context.get("workload"),
-                    "source": raw_contract.get("source_system"),
+                    "source": raw_contract.get("source_system") if raw_contract else None,
                     "dataset": dataset_id,
                     "run_id": query_context.get("run_id"),
                     "git_sha": query_context.get("git_sha"),
@@ -88,7 +62,6 @@ def build_dbt_vars(
                     "operation": "dbt_model",
                 }
             )
-
         datasets[dataset_id] = technical
 
     return {
