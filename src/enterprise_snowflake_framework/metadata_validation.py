@@ -7,7 +7,6 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
-from .bootstrap_validation import validate_bootstrap_metadata
 from .dataset_metadata import DatasetMetadataError, canonical_dataset, validate_runtime_model
 from .scd2_validation import validate_scd2_metadata
 
@@ -15,22 +14,6 @@ SCHEMA_FILES = {
     "project": "project.schema.json",
     "dataset": "dataset.schema.json",
     "raw_contract": "raw_contract.schema.json",
-}
-_CAPTURE_FIDELITY = {
-    "snapshot": {"current_state"},
-    "watermark": {"current_state"},
-    "net_change": {"net_change"},
-    "full_change": {"full_change", "full_event"},
-    "snapshot_diff": {"net_change"},
-    "cursor_or_file": {"current_state", "net_change", "full_change", "full_event"},
-}
-_CAPTURE_CHECKPOINTS = {
-    "snapshot": {"snapshot_id"},
-    "watermark": {"watermark"},
-    "net_change": {"watermark", "cursor", "source_position", "event_offset"},
-    "full_change": {"cursor", "source_position", "event_offset"},
-    "snapshot_diff": {"snapshot_id"},
-    "cursor_or_file": {"cursor", "file_identity", "source_position", "event_offset"},
 }
 
 
@@ -62,7 +45,7 @@ def schema_errors(document: dict[str, Any], schema: dict[str, Any], path: Path) 
 
 
 def validate_raw_contract(document: dict[str, Any], path: Path) -> list[str]:
-    """Validate source semantics only; this does not create or own connector checkpoints."""
+    """Validate source semantics only; connector implementation and checkpoints are out of scope."""
     contract = document["contract"]
     columns = contract["columns"]
     names = [column["name"] for column in columns]
@@ -88,6 +71,11 @@ def validate_raw_contract(document: dict[str, Any], path: Path) -> list[str]:
     if source_timestamp and source_timestamp not in column_names:
         errors.append(f"{path}: source_timestamp column is not declared: {source_timestamp}")
 
+    for field in ("ordering_columns", "idempotency_key"):
+        undeclared = [name for name in contract.get(field, []) if name not in column_names]
+        if undeclared:
+            errors.append(f"{path}: contract.{field} columns are not declared: {', '.join(undeclared)}")
+
     changes = contract["change_semantics"]
     if changes["mode"] == "cdc":
         for field in ("operation_column", "sequence_column"):
@@ -96,26 +84,12 @@ def validate_raw_contract(document: dict[str, Any], path: Path) -> list[str]:
                 errors.append(f"{path}: CDC contract requires change_semantics.{field}")
             elif column not in column_names:
                 errors.append(f"{path}: {field} column is not declared: {column}")
+        sequence_column = changes.get("sequence_column")
+        if sequence_column and sequence_column not in contract.get("ordering_columns", []):
+            errors.append(f"{path}: CDC sequence_column must be present in contract.ordering_columns")
 
-    capture = contract.get("capture")
-    if capture:
-        archetype = capture["archetype"]
-        fidelity = capture["fidelity"]
-        checkpoint_kind = capture["checkpoint_kind"]
-        if fidelity not in _CAPTURE_FIDELITY[archetype]:
-            errors.append(
-                f"{path}: capture archetype {archetype} does not support fidelity {fidelity}"
-            )
-        if checkpoint_kind not in _CAPTURE_CHECKPOINTS[archetype]:
-            errors.append(
-                f"{path}: capture archetype {archetype} does not support checkpoint_kind {checkpoint_kind}"
-            )
-        for field in ("ordering_columns", "idempotency_columns"):
-            undeclared = [name for name in capture.get(field, []) if name not in column_names]
-            if undeclared:
-                errors.append(f"{path}: capture.{field} columns are not declared: {', '.join(undeclared)}")
-        if archetype == "full_change" and not capture.get("idempotency_columns"):
-            errors.append(f"{path}: full_change capture requires capture.idempotency_columns")
+    if contract["capture_fidelity"] in {"full_change", "full_event"} and not contract.get("ordering_columns"):
+        errors.append(f"{path}: full_change/full_event source fidelity requires contract.ordering_columns")
 
     return errors
 
@@ -137,7 +111,7 @@ def validate_dataset(
             "append_only", "incremental_merge", "scd1", "scd2"
         }:
             errors.append(
-                f"{path}: stateful source-maintenance strategy {dataset['load']['strategy']} requires dataset.raw_contract"
+                f"{path}: source-maintenance strategy {dataset['load']['strategy']} requires dataset.raw_contract"
             )
         return errors
 
@@ -163,7 +137,6 @@ def validate_dataset(
         return errors
 
     contract = contract_document["contract"]
-    errors.extend(validate_bootstrap_metadata(contract, contract_path))
     errors.extend(validate_scd2_metadata(dataset, contract, path))
 
     load = dataset.get("load")

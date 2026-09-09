@@ -22,11 +22,7 @@ def validate_scd2_metadata(dataset: dict[str, Any], contract: dict[str, Any], pa
             f"dataset={dataset_keys}, contract={contract_keys}"
         )
 
-    referenced = [
-        scd2["effective_at_column"],
-        *scd2["order_columns"],
-        *scd2["tracked_columns"],
-    ]
+    referenced = [scd2["effective_at_column"], *scd2["order_columns"], *scd2["tracked_columns"]]
     delete = scd2.get("delete")
     if delete:
         referenced.append(delete["operation_column"])
@@ -37,25 +33,23 @@ def validate_scd2_metadata(dataset: dict[str, Any], contract: dict[str, Any], pa
     tracked_keys = [name for name in scd2["tracked_columns"] if name in contract_keys]
     if tracked_keys:
         errors.append(
-            f"{path}: load.scd2.tracked_columns must be attributes, not business keys: "
-            f"{', '.join(tracked_keys)}"
+            f"{path}: load.scd2.tracked_columns must be attributes, not business keys: {', '.join(tracked_keys)}"
         )
 
     if scd2["effective_at_column"] not in scd2["order_columns"]:
         errors.append(f"{path}: load.scd2.effective_at_column must be present in order_columns")
 
-    capture = contract.get("capture") or {}
-    missing_capture_order = [
-        name for name in capture.get("ordering_columns", []) if name not in scd2["order_columns"]
+    missing_source_order = [
+        name for name in contract.get("ordering_columns", []) if name not in scd2["order_columns"]
     ]
-    if missing_capture_order:
+    if missing_source_order:
         errors.append(
-            f"{path}: load.scd2.order_columns must include raw capture ordering columns: "
-            f"{', '.join(missing_capture_order)}"
+            f"{path}: load.scd2.order_columns must include raw contract ordering columns: "
+            f"{', '.join(missing_source_order)}"
         )
 
     missing_idempotency = [
-        name for name in capture.get("idempotency_columns", [])
+        name for name in contract.get("idempotency_key", [])
         if name not in contract_keys and name not in scd2["order_columns"]
     ]
     if missing_idempotency:
@@ -65,19 +59,23 @@ def validate_scd2_metadata(dataset: dict[str, Any], contract: dict[str, Any], pa
         )
 
     if dataset["materialization"]["type"] != "snapshot":
-        fidelity = capture.get("fidelity")
+        fidelity = contract.get("capture_fidelity")
         if fidelity not in {"full_change", "full_event"}:
             errors.append(
-                f"{path}: event-history SCD2 requires append-preserved raw capture fidelity "
+                f"{path}: authoritative event-history SCD2 requires capture_fidelity "
                 f"full_change/full_event; got {fidelity!r}"
             )
 
     change_semantics = contract["change_semantics"]
     if change_semantics.get("delete_semantics") == "tombstone":
-        expected = change_semantics.get("operation_column")
+        expected_column = change_semantics.get("operation_column")
+        expected_values = change_semantics.get("delete_values", [])
         if not delete:
             errors.append(f"{path}: tombstone SCD2 requires load.scd2.delete")
-        elif delete["operation_column"] != expected:
-            errors.append(f"{path}: tombstone SCD2 must use raw operation_column {expected!r}")
+        else:
+            if delete["operation_column"] != expected_column:
+                errors.append(f"{path}: tombstone SCD2 must use raw operation_column {expected_column!r}")
+            if set(delete["values"]) != set(expected_values):
+                errors.append(f"{path}: tombstone SCD2 delete values must match raw contract delete_values")
 
     return errors

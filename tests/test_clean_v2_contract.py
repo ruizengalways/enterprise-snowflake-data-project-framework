@@ -30,6 +30,17 @@ class CleanV2ContractTest(unittest.TestCase):
         self.assertNotIn("load_strategy", dataset)
         self.assertNotIn("implementation", dataset)
 
+    def test_raw_contract_is_v2_and_connector_agnostic(self) -> None:
+        schema = json.loads((self.schema_dir / "raw_contract.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(2, schema["properties"]["schema_version"]["const"])
+        contract = schema["properties"]["contract"]["properties"]
+        self.assertIn("capture_fidelity", contract)
+        self.assertIn("idempotency_key", contract)
+        self.assertNotIn("capture", contract)
+        serialized = json.dumps(schema)
+        self.assertNotIn("checkpoint_kind", serialized)
+        self.assertNotIn("bootstrap", serialized)
+
     def test_dbt_vars_have_no_compatibility_aliases(self) -> None:
         values = build_dbt_vars(self.project, self.schema_dir)
         datasets = values["esf_datasets"]
