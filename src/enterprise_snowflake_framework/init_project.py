@@ -10,6 +10,7 @@ PROJECT_DIRECTORIES = (
     "contracts/raw",
     "ingestion",
     "silver_processing",
+    "control_plane/sql",
     "dbt/models/sources",
     "dbt/models/marts",
     "dbt/models/semantic",
@@ -28,9 +29,6 @@ TRACKED_EMPTY_DIRECTORIES = (
     "dbt/models/marts",
     "dbt/models/semantic",
     "dbt/tests",
-    "operations/reset",
-    "operations/replay",
-    "operations/backfill",
     "docs",
     ".github/workflows",
 )
@@ -39,9 +37,16 @@ PROJECT_TEMPLATE_FILES = {
     "config/project.yml": "project.yml",
     "README.md": "README.md",
     "ingestion/README.md": "ingestion_README.md",
+    "control_plane/README.md": "control_plane_README.md",
+    "control_plane/sql/001_objects.sql": "control_plane_001_objects.sql",
+    "control_plane/sql/010_observability_views.sql": "control_plane_010_observability_views.sql",
+    "control_plane/sql/020_refresh_health.sql": "control_plane_020_refresh_health.sql",
     "dbt/dbt_project.yml": "dbt_project.yml",
     "dbt/profiles.yml": "profiles.yml",
     "silver_processing/deploy_manifest.txt": "deploy_manifest.txt",
+    "operations/replay/README.md": "replay_README.md",
+    "operations/backfill/README.md": "backfill_README.md",
+    "operations/reset/README.md": "reset_README.md",
 }
 
 
