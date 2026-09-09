@@ -104,6 +104,8 @@ class DatasetLifecycleOperationTests(unittest.TestCase):
         sql = (paused.destination / "operation.sql").read_text(encoding="utf-8")
         self.assertIn("ALTER TASK SILVER.FLEET_MSSQL_CUSTOMER_V1_TASK SUSPEND", sql)
         self.assertIn("SET ENABLED = FALSE", sql)
+        self.assertIn("LIFECYCLE_STATUS = 'PAUSED'", sql)
+        self.assertIn("050_dataset_lifecycle_status.sql", sql)
         self.assertIn("`esf` does not execute this file", sql)
 
         resumed = generate_lifecycle_scripts(
@@ -117,6 +119,7 @@ class DatasetLifecycleOperationTests(unittest.TestCase):
         sql = (resumed.destination / "operation.sql").read_text(encoding="utf-8")
         self.assertIn("ALTER TASK SILVER.FLEET_MSSQL_CUSTOMER_V1_TASK RESUME", sql)
         self.assertIn("SET ENABLED = TRUE", sql)
+        self.assertIn("LIFECYCLE_STATUS = 'ACTIVE'", sql)
 
     def test_soft_decommission_stops_all_versions_but_does_not_drop_data(self) -> None:
         result = generate_lifecycle_scripts(
@@ -130,6 +133,7 @@ class DatasetLifecycleOperationTests(unittest.TestCase):
         self.assertIn("FLEET_MSSQL_CUSTOMER_V1_TASK SUSPEND", sql)
         self.assertIn("FLEET_MSSQL_CUSTOMER_V2_TASK SUSPEND", sql)
         self.assertIn("SET ENABLED = FALSE", sql)
+        self.assertIn("LIFECYCLE_STATUS = 'DECOMMISSIONED'", sql)
         self.assertIn("STATUS = 'RETIRED'", sql)
         self.assertIn("does NOT DROP Silver history", sql)
         active_drop_lines = [
