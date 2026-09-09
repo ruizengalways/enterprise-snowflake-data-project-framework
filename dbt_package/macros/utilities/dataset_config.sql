@@ -48,9 +48,9 @@
         {%- set unique_key = keys[0] if keys | length == 1 else keys -%}
         {%- do config(materialized='incremental', incremental_strategy='merge', unique_key=unique_key) -%}
     {%- elif strategy == 'scd1' -%}
-        {%- do config(materialized='esf_scd1_current', esf_dataset_id=dataset_id) -%}
+        {%- do config(materialized='esf_scd1_current', meta={'esf_dataset_id': dataset_id}) -%}
     {%- elif strategy == 'scd2' -%}
-        {%- do config(materialized='esf_scd2_history', esf_dataset_id=dataset_id) -%}
+        {%- do config(materialized='esf_scd2_history', meta={'esf_dataset_id': dataset_id}) -%}
     {%- else -%}
         {%- do config(materialized='table') -%}
     {%- endif -%}

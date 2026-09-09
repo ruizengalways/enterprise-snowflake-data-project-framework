@@ -1,5 +1,9 @@
 {% materialization esf_scd1_current, adapter='snowflake' -%}
-    {%- set dataset_id = config.get('esf_dataset_id') -%}
+    {%- set meta = config.get('meta', {}) -%}
+    {%- set dataset_id = meta.get('esf_dataset_id') -%}
+    {%- if not dataset_id -%}
+        {{ exceptions.raise_compiler_error('esf_scd1_current requires meta.esf_dataset_id') }}
+    {%- endif -%}
     {%- set dataset = enterprise_snowflake_framework.esf_dataset_metadata(dataset_id) -%}
     {%- set load = dataset.get('load', {}) -%}
     {%- if load.get('strategy') != 'scd1' -%}
