@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enterprise-snowflake.example/schemas/source_manifest.schema.json",
+  "title": "Enterprise Snowflake Source Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "datasets"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "owner"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$"},
+        "owner": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    },
+    "datasets": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{1,63}$"},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pattern", "raw_contract"],
+        "properties": {
+          "pattern": {"enum": ["append", "full_refresh", "scd1", "scd2", "custom"]},
+          "raw_contract": {"type": "string", "pattern": "^contracts/raw/[a-z][a-z0-9_]*/[A-Za-z0-9_.-]+\\.ya?ml$"}
+        }
+      }
+    }
+  }
+}

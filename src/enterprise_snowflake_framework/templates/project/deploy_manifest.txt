@@ -1,0 +1,5 @@
+# Committed Silver SQL deployment order.
+# Add explicit paths such as:
+# silver_processing/fleet_mssql/customer/001_objects.sql
+# silver_processing/fleet_mssql/customer/010_apply.sql
+# silver_processing/fleet_mssql/customer/020_validate.sql

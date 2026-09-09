@@ -1,0 +1,13 @@
+__PROJECT_CODE_LOWER__:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      authenticator: "{{ env_var('DBT_AUTHENTICATOR', 'externalbrowser') }}"
+      role: "{{ env_var('DBT_ROLE') }}"
+      database: "{{ env_var('DBT_DATABASE') }}"
+      warehouse: "{{ env_var('DBT_WAREHOUSE') }}"
+      schema: "{{ env_var('DBT_DEFAULT_SCHEMA', 'GOLD') }}"
+      threads: 4

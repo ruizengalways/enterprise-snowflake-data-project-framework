@@ -1,0 +1,6 @@
+schema_version: 2
+project:
+  code: __PROJECT_CODE__
+  name: __PROJECT_NAME__
+  repository: __PROJECT_REPOSITORY__
+  owner_team: __OWNER_TEAM__
