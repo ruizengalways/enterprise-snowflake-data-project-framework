@@ -15,15 +15,9 @@ missing ownership unit -> create
 existing ownership unit -> never overwrite
 ```
 
-This applies to dataset roots, candidate `versions/vN/` directories and generated SLA/repair/release files.
+This applies to dataset roots, candidate `versions/vN/` directories and generated SLA/lifecycle/repair/release files.
 
-This project owns a domain-local control plane under:
-
-```text
-control_plane/
-```
-
-The committed SQL creates this domain's `CONTROL` schema, operational ledgers, version/SLA state, health evaluation, incident lifecycle and dashboard-ready views. It is not a shared global runtime database.
+This project owns a domain-local control plane under `control_plane/`. The committed SQL creates this domain's `CONTROL` schema, operational ledgers, version/SLA state, health evaluation, incident lifecycle and dashboard-ready views. It is not a shared global runtime database.
 
 Start with:
 
@@ -47,6 +41,16 @@ esf sla-sql <dataset> freshness_v1 \
   --project-root .
 ```
 
+Generate explicit lifecycle operations instead of directly mutating production from the CLI:
+
+```bash
+esf lifecycle-sql <dataset> pause_incident_123 \
+  --source <source_id> --action pause --version v1 --project-root .
+
+esf lifecycle-sql <dataset> decommission_2026q4 \
+  --source <source_id> --action decommission --project-root .
+```
+
 Candidate / repair / release flow:
 
 ```bash
@@ -56,4 +60,6 @@ esf repair-sql <dataset> v2 --source <source_id> --project-root .
 esf release-sql <dataset> --source <source_id> --from-version v1 --to-version v2 --project-root .
 ```
 
-`control-plan` and `repair-plan` are read-only. `sla-sql`, `repair-sql` and `release-sql` generate reviewable files only. They do not connect to Snowflake or execute production changes.
+`control-plan` and `repair-plan` are read-only. `sla-sql`, `lifecycle-sql`, `repair-sql` and `release-sql` generate reviewable files only. They do not connect to Snowflake or execute production changes.
+
+For domain shutdown, follow `docs/DOMAIN_DECOMMISSION.md`. Decommission is staged: stop movement and consumers first, preserve evidence for the agreed retention window, then perform physical/infrastructure cleanup in a separate approved change.

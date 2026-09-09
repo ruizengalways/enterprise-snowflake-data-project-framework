@@ -20,6 +20,7 @@ PROJECT_DIRECTORIES = (
     "operations/backfill",
     "operations/release",
     "operations/sla",
+    "operations/lifecycle",
     "docs",
     ".github/workflows",
 )
@@ -54,6 +55,8 @@ PROJECT_TEMPLATE_FILES = {
     "operations/reset/README.md": "reset_README.md",
     "operations/release/README.md": "release_README.md",
     "operations/sla/README.md": "sla_README.md",
+    "operations/lifecycle/README.md": "lifecycle_README.md",
+    "docs/DOMAIN_DECOMMISSION.md": "domain_decommission.md",
 }
 
 

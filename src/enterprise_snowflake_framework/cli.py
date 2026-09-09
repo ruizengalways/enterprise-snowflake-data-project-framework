@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .control_plan import build_control_plan
 from .init_project import initialize_project
+from .lifecycle import LIFECYCLE_ACTIONS, generate_lifecycle_scripts
 from .plan import SourcePlan, build_source_plan
 from .repair import PROBLEM_LAYERS, build_repair_plan, generate_silver_repair_scripts
 from .scaffold import (
@@ -98,6 +99,18 @@ def _build_parser() -> argparse.ArgumentParser:
     sla_sql.add_argument("--disabled", action="store_true")
     sla_sql.add_argument("--output-root", type=Path)
     sla_sql.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    lifecycle_sql = subparsers.add_parser(
+        "lifecycle-sql",
+        help="Generate explicit pause/resume/soft-decommission SQL for engineer review; never execute it.",
+    )
+    lifecycle_sql.add_argument("dataset_id")
+    lifecycle_sql.add_argument("operation_id")
+    lifecycle_sql.add_argument("--source", required=True, dest="source_id")
+    lifecycle_sql.add_argument("--action", required=True, choices=sorted(LIFECYCLE_ACTIONS))
+    lifecycle_sql.add_argument("--version")
+    lifecycle_sql.add_argument("--output-root", type=Path)
+    lifecycle_sql.add_argument("--project-root", type=Path, default=Path.cwd())
 
     repair_plan = subparsers.add_parser(
         "repair-plan", help="Explain the repair path without writing files or executing Snowflake SQL."
@@ -304,6 +317,23 @@ def main() -> None:
                 f"Generated SLA policy SQL: {result.destination}"
                 if result.created
                 else f"SKIPPED / SLA POLICY OWNED: {result.destination}. No files changed."
+            )
+            return
+
+        if args.command == "lifecycle-sql":
+            result = generate_lifecycle_scripts(
+                project_root=args.project_root,
+                source_id=args.source_id,
+                dataset_id=args.dataset_id,
+                action=args.action,
+                operation_id=args.operation_id,
+                version=args.version,
+                output_root=args.output_root,
+            )
+            print(
+                f"Generated lifecycle scripts: {result.destination}"
+                if result.created
+                else f"SKIPPED / LIFECYCLE OWNED: {result.destination}. No files changed."
             )
             return
 
