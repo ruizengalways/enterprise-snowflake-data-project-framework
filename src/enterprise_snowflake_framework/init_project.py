@@ -18,6 +18,7 @@ PROJECT_DIRECTORIES = (
     "operations/reset",
     "operations/replay",
     "operations/backfill",
+    "operations/release",
     "docs",
     ".github/workflows",
 )
@@ -48,6 +49,7 @@ PROJECT_TEMPLATE_FILES = {
     "operations/replay/README.md": "replay_README.md",
     "operations/backfill/README.md": "backfill_README.md",
     "operations/reset/README.md": "reset_README.md",
+    "operations/release/README.md": "release_README.md",
 }
 
 

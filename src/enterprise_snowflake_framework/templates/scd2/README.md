@@ -4,12 +4,12 @@ Keep the implementation visible in the domain repository.
 
 Reference algorithm:
 
-1. identify source events not yet present in the retained event ledger;
+1. capture new Bronze evidence into the version-local retained event ledger;
 2. identify affected business keys;
-3. append new evidence to the event ledger;
+3. deduplicate source evidence with the RAW contract idempotency key;
 4. delete only affected history rows;
-5. rebuild those keys deterministically from the complete retained event stream;
+5. rebuild those keys deterministically from retained evidence;
 6. treat tombstones as history boundaries but not published versions;
-7. publish `<ENTITY>_CURRENT` as a normal view over `is_current = true`.
+7. keep full history in one physical table and expose current state with `IS_ACTIVE = TRUE`.
 
-This supports replay, delete/reinsert and late-arriving events without hiding behavior in a shared dbt materialization.
+Each implementation version owns an independent Stream, Task and SQL procedure. Candidate versions remain unpublished until explicit release SQL is reviewed and executed.
