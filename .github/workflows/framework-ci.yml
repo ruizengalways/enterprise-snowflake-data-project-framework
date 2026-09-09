@@ -38,6 +38,7 @@ jobs:
           test ! -e dbt_package/macros/capture
           test ! -e dbt_package/macros/loading
           test ! -e dbt_package/macros/scd
+          test ! -e src/enterprise_snowflake_framework/bootstrap_validation.py
           grep -Fq 'merge into' dbt_package/materializations/esf_scd1_current.sql
           grep -Fq 'then delete' dbt_package/materializations/esf_scd1_current.sql
           FILE=dbt_package/materializations/esf_scd2_history.sql
@@ -48,7 +49,10 @@ jobs:
           grep -Fq 'valid_to' "$FILE"
           grep -Fq 'is_current' "$FILE"
           grep -Fq 'version_order' "$FILE"
-          grep -Fq 'copy grants' "$FILE"
+          grep -Fq '__ESF_EVENTS' "$FILE"
+          grep -Fq 'identify_affected_keys' "$FILE"
+          grep -Fq 'begin transaction' "$FILE"
+          grep -Fq 'delete from {{ target_relation }}' "$FILE"
           grep -Fq "where is_current = true" examples/mixed-strategy-project/dbt/models/silver/historical_entity_current.sql
           if grep -Fq 'is_current' examples/mixed-strategy-project/dbt/models/gold/gold_aggregation.sql; then exit 1; fi
           if grep -R -n -E 'merge into PLATFORM_CONTROL|update PLATFORM_CONTROL|insert into PLATFORM_CONTROL|delete from PLATFORM_CONTROL' dbt_package/macros; then exit 1; fi
