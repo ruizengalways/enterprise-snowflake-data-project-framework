@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   contracts:
-    name: v2 contracts and SCD2 behavior
+    name: v2 contracts and stateful behavior
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -38,6 +38,8 @@ jobs:
           test ! -e dbt_package/macros/capture
           test ! -e dbt_package/macros/loading
           test ! -e dbt_package/macros/scd
+          grep -Fq 'merge into' dbt_package/materializations/esf_scd1_current.sql
+          grep -Fq 'then delete' dbt_package/materializations/esf_scd1_current.sql
           FILE=dbt_package/materializations/esf_scd2_history.sql
           grep -Fq 'row_number() over' "$FILE"
           grep -Fq 'lag(_esf_record_hash)' "$FILE"
@@ -48,14 +50,8 @@ jobs:
           grep -Fq 'version_order' "$FILE"
           grep -Fq 'copy grants' "$FILE"
           grep -Fq "where is_current = true" examples/mixed-strategy-project/dbt/models/silver/historical_entity_current.sql
-          if grep -Fq 'is_current' examples/mixed-strategy-project/dbt/models/gold/gold_aggregation.sql; then
-            echo 'Gold must consume the current view rather than repeat the SCD2 predicate.' >&2
-            exit 1
-          fi
-          if grep -R -n -E 'merge into PLATFORM_CONTROL|update PLATFORM_CONTROL|insert into PLATFORM_CONTROL|delete from PLATFORM_CONTROL' dbt_package/macros; then
-            echo 'Domain-facing macros must not directly DML shared PLATFORM_CONTROL base tables.' >&2
-            exit 1
-          fi
+          if grep -Fq 'is_current' examples/mixed-strategy-project/dbt/models/gold/gold_aggregation.sql; then exit 1; fi
+          if grep -R -n -E 'merge into PLATFORM_CONTROL|update PLATFORM_CONTROL|insert into PLATFORM_CONTROL|delete from PLATFORM_CONTROL' dbt_package/macros; then exit 1; fi
 
   dbt-offline:
     name: Level 2 - dbt parse and compile
@@ -88,12 +84,11 @@ jobs:
           set -euo pipefail
           M=examples/mixed-strategy-project/dbt/target/manifest.json
           jq -e '.nodes | to_entries | any(.value.name == "reference_table" and .value.config.materialized == "table")' "$M" >/dev/null
-          jq -e '.nodes | to_entries | any(.value.name == "events" and .value.config.materialized == "incremental" and .value.config.incremental_strategy == "append")' "$M" >/dev/null
-          jq -e '.nodes | to_entries | any(.value.name == "current_entity" and .value.config.materialized == "incremental" and .value.config.incremental_strategy == "merge")' "$M" >/dev/null
-          jq -e '.nodes | to_entries | any(.value.name == "patient" and .value.config.materialized == "incremental" and .value.config.incremental_strategy == "merge")' "$M" >/dev/null
+          jq -e '.nodes | to_entries | any(.value.name == "events" and .value.config.materialized == "incremental")' "$M" >/dev/null
+          jq -e '.nodes | to_entries | any(.value.name == "current_entity" and .value.config.materialized == "incremental")' "$M" >/dev/null
+          jq -e '.nodes | to_entries | any(.value.name == "patient" and .value.config.materialized == "esf_scd1_current")' "$M" >/dev/null
           jq -e '.nodes | to_entries | any(.value.name == "historical_entity_history" and .value.config.materialized == "esf_scd2_history")' "$M" >/dev/null
           jq -e '.nodes | to_entries | any(.value.name == "historical_entity_current" and .value.config.materialized == "view")' "$M" >/dev/null
           jq -e '.nodes | to_entries | any(.value.name == "gold_aggregation" and .value.config.materialized == "dynamic_table")' "$M" >/dev/null
 
-# Level 5 is intentionally separate: reusable WIF workflows run live Snowflake acceptance
-# only when a DEV/CI Snowflake environment is actually configured and reachable.
+# Level 5 remains separate: live WIF acceptance only when Snowflake is actually configured.

@@ -36,6 +36,8 @@ contract:
     operation_column: source_operation
     sequence_column: source_sequence
     delete_semantics: tombstone
+    delete_values:
+      - D
   capture:
     archetype: full_change
     fidelity: full_change

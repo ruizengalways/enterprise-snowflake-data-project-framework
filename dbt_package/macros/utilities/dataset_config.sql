@@ -20,50 +20,39 @@
     {%- if query_tag -%}
         {%- do config(query_tag=query_tag) -%}
     {%- endif -%}
-
     {%- if materialization_type == 'custom' or runtime_mode in ['external', 'custom'] -%}
         {{ return('') }}
     {%- endif -%}
-
     {%- if materialization_type == 'view' -%}
         {%- do config(materialized='view') -%}
         {{ return('') }}
     {%- endif -%}
-
     {%- if materialization_type == 'dynamic_table' -%}
         {%- if runtime_mode != 'snowflake_managed' -%}
             {{ exceptions.raise_compiler_error('dynamic_table requires runtime.mode=snowflake_managed: ' ~ dataset_id) }}
         {%- endif -%}
-        {%- do config(
-            materialized='dynamic_table',
-            target_lag=materialization.get('target_lag'),
-            refresh_mode=materialization.get('refresh_mode', 'adaptive') | upper,
-            snowflake_warehouse=target.warehouse
-        ) -%}
+        {%- do config(materialized='dynamic_table', target_lag=materialization.get('target_lag'), refresh_mode=materialization.get('refresh_mode', 'adaptive') | upper, snowflake_warehouse=target.warehouse) -%}
         {{ return('') }}
     {%- endif -%}
-
     {%- if materialization_type == 'snapshot' -%}
-        {{ exceptions.raise_compiler_error(
-            'snapshot is a dbt snapshot resource, not a model materialization; keep the source SELECT readable and define the snapshot resource explicitly: ' ~ dataset_id
-        ) }}
+        {{ exceptions.raise_compiler_error('snapshot is a dbt snapshot resource; define it explicitly: ' ~ dataset_id) }}
     {%- endif -%}
-
     {%- if materialization_type != 'table' -%}
         {{ exceptions.raise_compiler_error('unsupported materialization.type for dataset ' ~ dataset_id ~ ': ' ~ materialization_type) }}
     {%- endif -%}
 
     {%- if strategy == 'append_only' -%}
         {%- do config(materialized='incremental', incremental_strategy='append') -%}
-    {%- elif strategy in ['incremental_merge', 'scd1'] -%}
+    {%- elif strategy == 'incremental_merge' -%}
         {%- set keys = load.get('business_key', []) -%}
         {%- set unique_key = keys[0] if keys | length == 1 else keys -%}
         {%- do config(materialized='incremental', incremental_strategy='merge', unique_key=unique_key) -%}
+    {%- elif strategy == 'scd1' -%}
+        {%- do config(materialized='esf_scd1_current', esf_dataset_id=dataset_id) -%}
     {%- elif strategy == 'scd2' -%}
         {%- do config(materialized='esf_scd2_history', esf_dataset_id=dataset_id) -%}
     {%- else -%}
         {%- do config(materialized='table') -%}
     {%- endif -%}
-
     {{ return('') }}
 {%- endmacro %}
