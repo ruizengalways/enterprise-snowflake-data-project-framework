@@ -1,12 +1,12 @@
 # Next chat handoff
 
-Read this file first when continuing the Framework in a new conversation. Then read `docs/CURRENT_CONTEXT.md` and the architecture document most relevant to the next task.
+Read this file first when continuing the Framework. Then read `docs/CURRENT_CONTEXT.md` and the architecture document most relevant to the next task.
 
 ## Current Framework release identity
 
 ```text
 repository = ruizengalways/enterprise-snowflake-data-project-framework
-version    = 0.23.0
+version    = 0.24.0
 ```
 
 Always re-check current `main`, open PRs and CI before changing code. Static CI is not Snowflake certification. A revision is Snowflake-certified only when the trusted workflow emits `snowflake-certification.json` with `status = CERTIFIED` for that exact SHA.
@@ -17,74 +17,58 @@ Do not redesign these contracts unless new evidence identifies a defect.
 
 ### 0.20 — canonical explicit-pipeline metrics
 
-`110_pipeline_execution_metrics.sql` introduced the stable explicit-run metrics contract. `ROWS_AFFECTED` is the primary DML `SQLROWCOUNT`; `DML_QUERY_ID` is the `SQLID` captured immediately after that DML. Pattern-specific work belongs in `METRICS`. Historical insert/update/delete fields are compatibility evidence, not one universal semantic contract.
+`110_pipeline_execution_metrics.sql` established `ROWS_AFFECTED` as the primary Silver DML `SQLROWCOUNT` and `DML_QUERY_ID` as the immediately captured `SQLID`. Pattern-specific physical work belongs in `METRICS`; historical insert/update/delete fields are compatibility evidence, not one universal contract. See `docs/architecture/RUN_EVIDENCE.md`.
 
-See `docs/architecture/RUN_EVIDENCE.md`.
+### 0.21 — release readiness
 
-### 0.21 — release readiness and active/candidate invariants
+`120_release_readiness.sql` plus generated release bundles enforce active/candidate invariants, runtime/DQ/comparison freshness, hard preflight/postflight, `CONTROL.RELEASE_RUN` audit, grant-preserving cutover and guarded rollback. `BLOCKED` has no bypass; `REVIEW_REQUIRED` requires explicit acceptance and reason.
 
-`120_release_readiness.sql` plus the generated release bundle enforce fail-closed release/rollback behavior:
+Keep `CANDIDATE_VERSION` as the current single-candidate convenience/lock. Do not invent a large speculative candidate state machine.
 
-```text
-candidate deploy
-  -> bootstrap / refresh
-  -> catch up
-  -> DQ
-  -> active-vs-candidate compare
-  -> hard preflight
-  -> explicit activate
-  -> hard postflight
-  -> CONTROL.RELEASE_RUN audit
-  -> guarded rollback if required
-```
+### 0.22 — template provenance
 
-`BLOCKED` has no bypass. `REVIEW_REQUIRED` requires explicit acceptance and an operator reason. `CANDIDATE_VERSION` remains a single-candidate convenience/lock; do not replace it with a speculative large lifecycle state machine.
+New implementation versions declare deterministic `framework_version`, `template_id`, `template_revision`, and `template_digest`. `esf upgrade-plan` is read-only. Pre-provenance versions are `UNKNOWN`; never infer historical template revisions from SQL. Digest mismatch is `UNVERIFIED`. See `docs/architecture/TEMPLATE_PROVENANCE.md`.
 
-### 0.22 — template provenance and read-only upgrade planning
+### 0.23 — version-local Task operational policy
 
-Every newly scaffolded implementation version declares deterministic provenance:
+`stream_task` versions can explicitly declare Task warehouse, minimum trigger interval, timeout, suspend-after-failures and error integration. These are version execution policy, not source-manifest semantics or SLA.
+
+Do not expose arbitrary schedules, generic task-graph retry, `AFTER` orchestration or a universal readiness DSL through this contract. Stream/Task template revision 1 remains immutable; current Stream/Task scaffold contract is revision 2. See `docs/architecture/TASK_OPERATIONAL_CONFIG.md`.
+
+### 0.24 — configurable domain health evaluation cadence
+
+Released `040_health_task.sql` remains unchanged with its historical one-minute schedule.
+
+New migration:
 
 ```text
-framework_version
-template_id
-template_revision
-template_digest
+130_health_evaluation_cadence.sql
 ```
 
-`esf upgrade-plan --project-root .` is read-only and reports `CURRENT`, `UPDATE_AVAILABLE`, `ADVISORY`, `UNKNOWN` or `UNVERIFIED`. Pre-provenance versions are `UNKNOWN`; never infer a historical template revision from SQL. Digest mismatch is `UNVERIFIED`.
-
-See `docs/architecture/TEMPLATE_PROVENANCE.md`.
-
-### 0.23 — narrow Stream/Task operational policy
-
-Task operational settings are version-local execution policy. They belong in `version.yml`; they do not belong in the source manifest and are not SLA.
-
-A new `stream_task` version declares its warehouse and may opt into:
+adds:
 
 ```text
-minimum_trigger_interval_seconds
-  -> USER_TASK_MINIMUM_TRIGGER_INTERVAL_IN_SECONDS
-
-timeout_seconds
-  -> USER_TASK_TIMEOUT_MS
-
-suspend_after_failures
-  -> SUSPEND_TASK_AFTER_NUM_FAILURES
-
-error_integration
-  -> ERROR_INTEGRATION
-
-warehouse
-  -> WAREHOUSE
+CONTROL.HEALTH_EVALUATION_CHANGE
+CONTROL.HEALTH_EVALUATION_CONFIG_V
 ```
 
-Optional settings are omitted when unspecified so Snowflake defaults remain in effect. Minimum trigger interval is accepted only for actual Stream-triggered `append`, `scd1` and `scd2` implementations; `full_refresh + stream_task` fails closed for that option because it has no generated Stream readiness condition.
+Migration 130 does **not** alter the Task. Cadence changes are explicit reviewed operation bundles generated by:
 
-The Framework deliberately does not expose arbitrary schedules, generic `AFTER` graph wiring, `TASK_AUTO_RETRY_ATTEMPTS`, a universal readiness DSL, or a general orchestration framework.
+```bash
+esf health-cadence-sql <operation-id> \
+  --interval-seconds <10..691200> \
+  --reason "..." \
+  --resume-after \
+  --project-root .
+```
 
-Pre-0.23 Stream/Task versions without a `task:` block remain valid. Because the generated Stream/Task artifact contract changed, Stream/Task template provenance advances from revision 1 to revision 2 while revision 1 remains immutable in the registry.
+or with `--leave-suspended` instead of `--resume-after`.
 
-See `docs/architecture/TASK_OPERATIONAL_CONFIG.md`.
+The generated operation hard-guards duplicate operation ids, writes `STARTED` before Task DDL, suspends `CONTROL.EVALUATE_DOMAIN_HEALTH_TASK`, changes its interval schedule, optionally resumes only by explicit choice, then records `SUCCEEDED`. Partial failure leaves `STARTED` evidence and is not blindly retried.
+
+`HEALTH_EVALUATION_CONFIG_V` is the latest successfully **recorded Framework operation**, not authoritative evidence of out-of-band Task edits. Preflight/postflight use `SHOW TASKS` to verify actual Snowflake state/schedule.
+
+Health evaluator cadence is domain operational policy, not dataset SLA, and is not added to `config/project.yml`, source manifests or version metadata. See `docs/architecture/HEALTH_EVALUATION_CADENCE.md`.
 
 ## Canonical architecture vocabulary
 
@@ -108,13 +92,11 @@ SEMANTIC
 CONTROL
 ```
 
-Logical and physical names are intentionally separate. `Control` is cross-cutting operational state/evidence, not a medallion transformation layer. Do not build one enterprise-wide writable `PLATFORM_CONTROL` runtime database.
-
-See `docs/architecture/NAMING_AND_LAYERS.md`.
+A domain owns its writable `CONTROL` schema. Cross-domain observability is read-only aggregation. See `docs/architecture/NAMING_AND_LAYERS.md`.
 
 ## Current Control Plane migration chain
 
-Fresh projects contain Framework-known migrations through `120_release_readiness.sql`:
+Fresh 0.24 projects contain:
 
 ```text
 001_objects.sql
@@ -130,15 +112,14 @@ Fresh projects contain Framework-known migrations through `120_release_readiness
 100_dynamic_table_observability.sql
 110_pipeline_execution_metrics.sql
 120_release_readiness.sql
+130_health_evaluation_cadence.sql
 ```
 
-Released numbered migrations are immutable. Never edit 001..120 in place after release; append a later migration.
+Released numbered migrations are immutable. Never edit 001..130 in place after release; append a later migration.
 
-Rerunning `esf init-project` may materialize new Framework files but never rewrites an existing domain-owned deploy manifest or implementation SQL. Use `esf control-plan` to review adoption gaps and append new migrations without reordering recorded history.
+For an older domain, rerun `esf init-project` to materialize missing Framework files, then use `esf control-plan`. Existing `control_plane/deploy_manifest.txt` stays domain-owned and is never silently rewritten; explicitly append newly adopted migrations without reordering recorded history.
 
 ## Stable execution-model boundary
-
-Logical pattern and implementation technology remain separate:
 
 ```text
 logical pattern
@@ -165,8 +146,6 @@ Unsupported combinations fail closed. `procedure` is an implementation artifact,
 
 ## Observability boundary
 
-Unify evidence contracts, not runtime mechanics:
-
 ```text
 explicit Stream/Task or batch apply
   -> CONTROL.PIPELINE_RUN
@@ -181,39 +160,31 @@ both
   -> health / SLA / incidents
 ```
 
-Do not create fake Dynamic Table `PIPELINE_RUN` rows and do not add a second competing unified execution-health abstraction unless a concrete contract cannot fit the current path.
+Do not fabricate Dynamic Table `PIPELINE_RUN` rows. Do not create a second competing unified execution-health abstraction unless a concrete contract cannot fit the existing path.
 
 ## Ownership and deployment guardrails
 
-Framework generates once; domain owns forever. Existing dataset/version SQL is never rewritten by a Framework upgrade.
+Framework generates once; domain owns forever. CONTROL and SILVER are checksum-locked apply-once migrations. New persistent version-owned objects are create-only/fail-closed. Candidate deployment never changes stable consumer objects; explicit release/rollback is the generated stable-view replacement boundary.
 
-CONTROL and SILVER deployments are checksum-locked apply-once migrations. Same applied path/checksum/order skips; drift, reordering, removed history or unresolved `STARTED`/`FAILED` blocks.
-
-New persistent version-owned objects are create-only/fail-closed. Candidate deployment never modifies stable consumer objects. Stable view replacement is generated only at explicit release/rollback boundaries and preserves grants with `COPY GRANTS`.
-
-Do not introduce deployment-time scaffolding, hidden runtime metadata routing, a central SCD engine, or dbt as the Bronze-to-Silver execution engine.
+Do not introduce deployment-time scaffolding, hidden metadata routing, one central SCD runtime, arbitrary orchestration DSLs, or dbt as the Bronze-to-Silver engine.
 
 ## Immediate next implementation priority
 
-Continue in this order unless real Snowflake evidence changes the priority:
+Only one planned architecture item remains, unless real Snowflake evidence identifies a defect:
 
 ```text
-1. Prompt 11 — configurable domain health evaluation interval
+Prompt 6 — Dynamic Table observability enrichment
 
-   Current released 040_health_task.sql contains the historical 1 MINUTE schedule.
-   NEVER edit released 040.
-   Add a new later migration/configuration mechanism.
-   Keep the policy domain-level; do not pretend one cadence is globally optimal.
+migration 100 already normalizes native refresh evidence
+CONTROL.DATASET_OBSERVABILITY_V already unifies the health boundary
 
-2. Prompt 6 — Dynamic Table observability enrichment
+inspect current Snowflake native refresh metadata
+add only concrete fields useful for operations
+use a NEW later migration; never edit 100
 
-   Migration 100 already provides the native evidence path and health consumes
-   CONTROL.DATASET_OBSERVABILITY_V.
-   Only add concrete missing Snowflake-native fields if they improve operations.
-   Do not build another unified observability layer.
+do not create another unified observability view
+do not insert fake PIPELINE_RUN rows
 ```
-
-Before starting Prompt 11, first finish any open 0.23 PR/CI and verify `main` contains the Task operational policy contract.
 
 ## New conversation starter
 
@@ -221,6 +192,6 @@ Before starting Prompt 11, first finish any open 0.23 PR/CI and verify `main` co
 Continue enterprise-snowflake framework.
 Read docs/NEXT_CHAT_HANDOFF.md, docs/CURRENT_CONTEXT.md and the architecture doc for the next task.
 Re-check current GitHub main, open PRs and CI before modifying code.
-Continue from the immediate-next-work section; do not redesign completed apply-once,
-metrics, release-readiness, provenance, Task policy, DDL safety or execution-model work.
+Continue Prompt 6 narrowly; do not redesign completed apply-once, release-readiness,
+provenance, Task policy, health-cadence, DDL safety or execution-model work.
 ```
