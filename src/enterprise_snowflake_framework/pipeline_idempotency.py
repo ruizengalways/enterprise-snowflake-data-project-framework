@@ -36,7 +36,7 @@ def render_idempotency_conflict_guard(
                 FROM {relation} {alias}
                 GROUP BY {identity}
                 HAVING COUNT(DISTINCT TO_VARCHAR(HASH({payload}))) > 1
-            )
+            ) CONFLICTING_IDENTITIES
         );
         IF (V_IDEMPOTENCY_CONFLICTS > 0) THEN
             RAISE E_IDEMPOTENCY_CONFLICT;
