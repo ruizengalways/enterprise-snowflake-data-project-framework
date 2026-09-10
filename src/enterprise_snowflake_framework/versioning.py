@@ -159,6 +159,7 @@ SELECT
     CANDIDATE_EXECUTION_MODEL,
     RUNTIME_STATUS,
     RUNTIME_EVIDENCE_AT,
+    CANDIDATE_DATA_MAX_AT,
     DQ_STATUS,
     DQ_CHECKED_AT,
     COMPARISON_STATUS,
@@ -292,8 +293,9 @@ def generate_release_scripts(
         "4. Run `preflight.sql` and review `READY`, `REVIEW_REQUIRED` or `BLOCKED`.\n"
         "5. Review and run `activate.sql`; it repeats preflight as a hard guard and writes `CONTROL.RELEASE_RUN`.\n"
         "6. Run `postflight.sql` and keep `rollback.sql` for the approved rollback window.\n\n"
-        "Rollback is intentionally blocked if another candidate has been registered since cutover. "
-        "Do not use an old rollback bundle after a newer release cycle has begun.\n"
+        "Before rollback, explicitly catch up the retired target implementation and rerun its DQ. "
+        "The rollback script then requires target runtime SUCCESS, fresh target DQ PASS, catch-up evidence not behind the current active version, and no newer candidate. "
+        "There is no generated rollback bypass.\n"
     )
     files = {
         "README.md": readme,
