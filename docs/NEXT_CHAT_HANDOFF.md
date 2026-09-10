@@ -1,59 +1,135 @@
 # Next chat handoff
 
-Read this file first when continuing the Framework in a new conversation. Then read `docs/CURRENT_CONTEXT.md` and the architecture document most relevant to the next task.
+Read this file first when continuing the Framework in a new conversation. Then read `docs/CURRENT_CONTEXT.md`, `docs/architecture/RUN_EVIDENCE.md`, and the architecture document most relevant to the next task.
 
 ## Stable repository state
 
 ```text
 repository = ruizengalways/enterprise-snowflake-data-project-framework
-version    = 0.19.0
-main       = a98a38bcb03b00a36c63cb0f2f8246d4356478d6
-merged PR  = #27 feat: separate execution models and add Dynamic Table Silver
-PR CI      = Silver-first Toolkit CI #254 = SUCCESS
-main CI    = Silver-first Toolkit CI #255 = SUCCESS
-Snowflake certification workflow run #11 = SKIPPED
+version    = 0.20.0
+0.20 code merge = 8647190c175d4c6b815e46eb78574aea475a5040
+merged PR  = #29 fix: make Silver pipeline metrics semantically consistent
+PR CI      = Silver-first Toolkit CI #263 = SUCCESS
+main CI    = Silver-first Toolkit CI #264 = SUCCESS
+Snowflake certification workflow run #20 = SKIPPED
 ```
 
-The skip is intentional while the trusted Snowflake certification environment is not explicitly enabled/configured. **No 0.19.0 SHA has yet produced a real `status = CERTIFIED` Snowflake artifact.** Do not describe 0.19.0 as Snowflake-certified until that happens.
+This handoff is committed after the 0.20 code merge, so always re-check the current `main` SHA before changing code. The certification skip is intentional while the trusted Snowflake certification environment is not explicitly enabled/configured. **No 0.20.0 SHA has yet produced a real `status = CERTIFIED` Snowflake artifact.** Static CI is not Snowflake certification.
 
-There should be no need to reopen or redesign PR #27. Its architecture is now the stable main contract.
+## What 0.20 changed
 
-## Core model
+0.20 fixes a real observability semantics problem. Older generated procedures could treat Snowflake `SQLROWCOUNT` after `MERGE` as if it meant update-only rows. It does not: it is the total row count affected by that DML statement. Older generated code also assigned `QUERY_ID = LAST_QUERY_ID()` only during later success logging, so the recorded ID could refer to a logging/transaction statement rather than the transformation DML.
 
-Dataset semantics and Snowflake execution technology are separate concepts:
+New generated explicit Silver apply procedures use canonical metrics contract version 1:
 
 ```text
-logical dataset
-  pattern = semantic behavior
-
-implementation version
-  execution_model = Snowflake execution technology
+METRICS_CONTRACT_VERSION
+ROWS_READ
+ROWS_AFFECTED
+AFFECTED_BUSINESS_KEYS
+SILVER_DATA_MAX_AT
+SILVER_PUBLISHED_AT
+DML_QUERY_ID
+METRICS VARIANT
+STATUS / timestamps / errors
 ```
 
-Logical `pattern` values:
+The invariant is:
+
+```text
+ROWS_AFFECTED
+  = SQLROWCOUNT for the primary Silver DML
+
+DML_QUERY_ID
+  = SQLID captured immediately after that same DML
+```
+
+`AFFECTED_BUSINESS_KEYS` is the number of distinct logical keys considered in the run. Pattern-specific physical work belongs in `METRICS`, not in misleading universal columns.
+
+Pattern behavior:
 
 ```text
 append
+  canonical rows_affected = output INSERT rows
+  metrics.output_rows_inserted
+
 full_refresh
+  canonical rows_affected = INSERT OVERWRITE rows written
+  metrics.snapshot_rows_written
+
 scd1
+  canonical rows_affected = total MERGE rows affected
+  metrics.merge_rows_affected
+  do NOT label this ROWS_UPDATED
+
 scd2
-custom
+  canonical rows_affected = rebuilt history INSERT rows
+  metrics.events_inserted
+  metrics.history_rows_deleted
+  metrics.history_rows_rebuilt
+  each important DML also keeps its own captured query id
 ```
 
-Version-level `execution_model` values:
+The old `ROWS_INSERTED`, `ROWS_UPDATED`, `ROWS_DELETED` columns remain for historical compatibility. They are not a cross-pattern contract. New code only fills them when the meaning is unambiguous; SCD1/SCD2 do not fabricate a breakdown.
+
+## Control Plane through 0.20
+
+Fresh domain control manifest includes:
 
 ```text
-stream_task
-dynamic_table
-batch_sql
-custom
+001_objects.sql
+010_observability_views.sql
+020_refresh_health.sql
+030_sla_incident_lifecycle.sql
+040_health_task.sql
+050_dataset_lifecycle_status.sql
+060_run_evidence_api.sql
+070_enterprise_health_export.sql
+080_data_quality_reconciliation.sql
+090_dataset_execution_model.sql
+100_dynamic_table_observability.sql
+110_pipeline_execution_metrics.sql
 ```
 
-Do not add `procedure` as a peer execution model. A procedure is an implementation artifact used by some execution models.
+Never edit already released 001..110 migration templates in place after release. Future fixes append a later migration.
 
-The source manifest remains semantic-only: it stores `pattern` and `raw_contract`. It does **not** store `execution_model`. New `version.yml` files explicitly store execution model. Legacy standard version files without that field remain readable as `stream_task`.
+Migration 110 adds to `CONTROL.PIPELINE_RUN`:
 
-## Supported execution matrix in 0.19.0
+```text
+METRICS_CONTRACT_VERSION
+ROWS_AFFECTED
+AFFECTED_BUSINESS_KEYS
+DML_QUERY_ID
+METRICS
+```
+
+and creates the stable read surface:
+
+```text
+CONTROL.PIPELINE_EXECUTION_METRICS_V
+```
+
+The view aliases existing timing evidence as `DATA_MAX_AT` / `PUBLISHED_AT` and exposes old row-count fields with `LEGACY_` names for audit.
+
+Migration 110 does not rewrite existing generated apply procedures. Generated-once/domain-owned still means old implementations keep their historical SQL until a domain creates a new implementation version or manually migrates its owned code.
+
+For an old domain, rerun `esf init-project` to materialize missing migration files, review `esf control-plan`, and explicitly append adopted migrations without reordering already-applied entries. `esf-control-preflight` now recognizes 110 as a Framework migration.
+
+## Core model that remains stable
+
+Logical dataset semantics and version implementation technology remain separate:
+
+```text
+logical dataset
+  pattern = append | full_refresh | scd1 | scd2 | custom
+
+implementation version
+  execution_model = stream_task | dynamic_table | batch_sql | custom
+```
+
+The source manifest stores semantic `pattern` and `raw_contract`; it does not store `execution_model`.
+
+Supported execution matrix remains deliberately fail-closed:
 
 ```text
 append       + stream_task   = supported
@@ -70,186 +146,99 @@ scd2         + dynamic_table = rejected
 other unimplemented combinations = rejected
 ```
 
-Keep this fail-closed. Do not enable a new combination until its semantic behavior, operations and real Snowflake certification are implemented.
+Do not add `procedure` as an execution model; it is an implementation artifact.
 
-## Dynamic Table implementation
+## Observability boundary
 
-Dynamic Table is now a first-class Bronze-to-Silver execution option for compatible declarative patterns. dbt still begins at trusted Silver; dbt is not a Bronze-to-Silver engine.
-
-For SCD1 Dynamic Tables, current state is defined declaratively from reviewed Bronze evidence using business key plus ordering columns. Late/out-of-order older events must not regress current state, and tombstones are filtered according to the RAW contract.
-
-For full-refresh Dynamic Tables, the Dynamic Table represents the current Bronze snapshot.
-
-A Dynamic Table implementation does not receive fake Stream/Task/apply/replay procedure files. Its ownership unit is intentionally smaller:
+Unify observability contracts, not runtime mechanics:
 
 ```text
-README.md
-version.yml
-001_dynamic_table.sql
-020_validate.sql
-025_compare.sql
-040_register.sql
-050_publish.sql
-060_policy.sql
-deploy_manifest.fragment.txt
+explicit Stream/Task or batch apply
+  -> CONTROL.PIPELINE_RUN
+  -> CONTROL.PIPELINE_EXECUTION_METRICS_V for canonical explicit-run metrics
+
+Dynamic Table
+  -> INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY
+  -> CONTROL.DYNAMIC_TABLE_REFRESH_STATUS_V
+
+both
+  -> CONTROL.DATASET_OBSERVABILITY_V
+  -> health / SLA
 ```
 
-`020_validate.sql` remains explicit dataset-local DQ source code and writes normalized `CONTROL.DQ_RESULT` evidence. It is not a fake validation Task/procedure.
+Do not insert fake `PIPELINE_RUN` rows for Dynamic Tables and do not add a second competing unified Silver observability view unless there is a concrete missing contract that cannot fit the current surface.
 
-Dynamic Table execution configuration is version policy:
+## Deployment / DDL / release guardrails
 
-```text
-target_lag
-warehouse
-refresh_mode = incremental | full
-```
+CONTROL and SILVER are checksum-locked apply-once migrations. Same applied path/checksum skips; changed/reordered/removed applied history or unresolved STARTED/FAILED blocks.
 
-`TARGET_LAG` is not the logical business SLA. `CONTROL.SLA_POLICY` remains separate. The Framework deliberately does not generate refresh mode `AUTO` in 0.19.0.
+New persistent version-owned objects are create-only/fail-closed. Candidate deployment never changes stable consumer objects. Explicit release/rollback is the only generated stable-view replacement boundary and uses `CREATE OR REPLACE VIEW ... COPY GRANTS`. Old runtime processing is retired last.
 
-Example candidate:
+Do not introduce deployment-time scaffolding, hidden runtime metadata routing, a central SCD engine, or dbt as the Bronze-to-Silver engine.
 
-```bash
-esf scaffold-version customer v2 \
-  --source fleet_mssql \
-  --execution-model dynamic_table \
-  --target-lag "5 minutes" \
-  --warehouse WH_TRANSPORT_TRANSFORM \
-  --refresh-mode incremental
-```
+## Dynamic Table remains first-class
 
-## Control Plane through 0.19.0
+Dynamic Table supports `scd1` and `full_refresh` in the current matrix. It does not generate fake Stream/Task/apply/replay artifacts. Native refresh history remains its execution evidence. Lifecycle, repair, release, rollback and certification are execution-model aware.
 
-Fresh domain control manifest now includes:
-
-```text
-001_objects.sql
-010_observability_views.sql
-020_refresh_health.sql
-030_sla_incident_lifecycle.sql
-040_health_task.sql
-050_dataset_lifecycle_status.sql
-060_run_evidence_api.sql
-070_enterprise_health_export.sql
-080_data_quality_reconciliation.sql
-090_dataset_execution_model.sql
-100_dynamic_table_observability.sql
-```
-
-Never edit already released 001..100 migration templates in place after this release. Future fixes append a later migration.
-
-`090_dataset_execution_model.sql` adds version-level execution metadata such as:
-
-```text
-CONTROL.DATASET_VERSION.EXECUTION_MODEL
-CONTROL.DATASET_VERSION.PRIMARY_RUNTIME_OBJECT
-```
-
-`100_dynamic_table_observability.sql` reads Snowflake-native `INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY` and normalizes Dynamic Table refresh evidence. It does **not** fabricate `CONTROL.PIPELINE_RUN` rows. `CONTROL.DATASET_OBSERVABILITY_V` selects the appropriate Silver evidence source using the active version execution model.
-
-For an old domain, rerun `esf init-project` to materialize missing 090/100 files, review `esf control-plan`, then explicitly append them to the domain-owned manifest without reordering already applied entries. `esf-control-preflight` remains the deployment gate.
-
-## Lifecycle / repair / release
-
-Lifecycle is execution-model aware:
-
-```text
-stream_task   -> ALTER TASK ... SUSPEND / RESUME
-dynamic_table -> ALTER DYNAMIC TABLE ... SUSPEND / RESUME
-batch_sql     -> coordinate external scheduler explicitly
-custom        -> domain-authored
-```
-
-Repair no longer assumes every candidate has a replay procedure or Task. A Dynamic Table repair uses explicit refresh/rebuild semantics and rejects bounded replay when that execution model cannot represent it safely.
-
-Release can cross execution technologies. The main 0.19 reference scenario is:
-
-```text
-customer v1: pattern=scd1, execution_model=stream_task
-customer v2: pattern=scd1, execution_model=dynamic_table
-```
-
-Candidate deployment never changes stable consumer objects. Explicit release/rollback continues to switch stable published views with `CREATE OR REPLACE VIEW ... COPY GRANTS`. Candidate readiness/refresh happens before publication and the old runtime is retired last.
-
-## Stable deployment contract
-
-CONTROL and SILVER deployment use environment-local apply-once migration history:
-
-```text
-new path                       -> APPLY
-same applied path/checksum     -> SKIP
-changed applied checksum       -> BLOCK
-removed/reordered history      -> BLOCK
-unresolved STARTED/FAILED      -> BLOCK
-```
-
-`CONTROL.DEPLOYMENT_HISTORY` stores path, SHA-256, manifest position, project/framework Git SHA, timestamps/status/error details and GitHub run metadata.
-
-Existing populated domains require explicit reviewed baseline adoption; the migration runner must never replay historical manifests simply because deployment history is new.
-
-New persistent version-owned objects are create-only/fail-closed. Stable consumer view replacement is limited to explicit release/rollback and uses `COPY GRANTS`.
-
-## RAW / source / dbt boundaries
-
-- RAW contract decisions remain human-reviewed.
-- source profiling/discovery is outside this Framework.
-- ingestion technology remains source-specific.
-- Bronze is replay/audit evidence.
-- Silver uses explicit Snowflake-native source code generated once and then domain-owned.
-- no universal runtime metadata routing or central SCD engine.
-- dbt starts at trusted Silver and owns Gold/Mart/Semantic work.
-
-## DQ, reconciliation and enterprise health
-
-Dataset-local validation writes `CONTROL.DQ_RESULT`. Domain-authored reconciliation may write `CONTROL.RECONCILIATION_RESULT`. Active-version evidence affects production health; candidate evidence remains isolated for shadow/release review.
-
-Each domain owns writable health/control state. Enterprise monitoring is read-only aggregation through:
-
-```text
-CONTROL.ENTERPRISE_HEALTH_EXPORT_V
-CONTROL.DOMAIN_HEALTH_SUMMARY_V
-```
-
-Do not introduce one shared writable enterprise control plane.
-
-## Trusted Snowflake certification
-
-The certification layer is implemented and remains separated from untrusted PR CI. The trusted workflow requires the dedicated boundary:
-
-```text
-SNOWFLAKE_DATABASE  = CI_FRAMEWORK_CERT
-SNOWFLAKE_ROLE      = AR_FRAMEWORK_CERT
-SNOWFLAKE_USER      = SU_GITHUB_FRAMEWORK_CERT
-SNOWFLAKE_WAREHOUSE = WH_FRAMEWORK_CERT_TRANSFORM
-reader probe role   = AR_FRAMEWORK_CERT_READER
-```
-
-0.19 extends the live suite with:
+The trusted certification suite includes a cross-execution-model scenario:
 
 ```text
 SCD1 v1 stream_task
-  -> candidate v2 dynamic_table
-  -> native refresh
-  -> late/out-of-order equivalence
-  -> post-candidate Bronze catch-up
-  -> native refresh-history evidence
-  -> DQ + version comparison
+  -> v2 dynamic_table
+  -> native refresh / catch-up
+  -> DQ + comparison
   -> COPY GRANTS cutover
-  -> execution-model-aware health
+  -> health
   -> rollback
 ```
 
-The exact main SHA is only Snowflake-certified when the trusted workflow emits `snowflake-certification.json` with `status = CERTIFIED`. Static CI #255 is not that certification.
+A revision is only Snowflake-certified when the trusted workflow emits `snowflake-certification.json` with `status = CERTIFIED` for that exact SHA.
 
-## Immediate next work
+## Immediate next implementation priority
 
-Start the next conversation with:
+Continue the roadmap in this order unless new live Snowflake evidence changes it:
+
+```text
+1. release preflight / postflight / RELEASE_RUN audit
+   + strict single-active/single-candidate invariants
+   (Prompt 8 + the invariant portion of Prompt 13)
+
+2. template provenance + read-only upgrade-plan advisory
+   (Prompt 7)
+
+3. documentation vocabulary consistency guard
+   (Prompt 12)
+
+4. narrow Task operational configuration
+   (Prompt 10)
+
+5. configurable domain health evaluation interval via a NEW migration
+   (Prompt 11; never edit released 040)
+
+6. Dynamic Table observability enrichment only if evidence is still missing
+   (Prompt 6; do not build a second abstraction)
+```
+
+For the next feature, prefer strong release preconditions and audit over a large candidate state machine. Retain `CONTROL.DATASET.CANDIDATE_VERSION` for now but enforce invariants such as:
+
+```text
+exactly/at most one ACTIVE version as appropriate
+at most one candidate per logical dataset
+candidate != active
+CANDIDATE_VERSION references a non-retired version
+registering another candidate while one exists fails closed
+release from_version must equal ACTIVE_VERSION
+```
+
+Do not immediately replace the existing states with a speculative DEVELOPMENT/BOOTSTRAPPING/SHADOW/VALIDATED state machine unless real operations own every transition.
+
+## New conversation starter
 
 ```text
 Continue enterprise-snowflake framework.
-First read docs/NEXT_CHAT_HANDOFF.md, docs/CURRENT_CONTEXT.md and docs/architecture/EXECUTION_MODELS.md.
-Then re-check current main/open PR/CI before changing code.
+First read docs/NEXT_CHAT_HANDOFF.md, docs/CURRENT_CONTEXT.md,
+docs/architecture/RUN_EVIDENCE.md and docs/architecture/EXECUTION_MODELS.md.
+Then re-check current GitHub main, open PRs and CI before modifying code.
+Continue from the immediate-next-work section; do not redesign completed apply-once,
+DDL safety, certification, execution-model separation or canonical metrics work.
 ```
-
-Recommended next priority is **live Snowflake certification and acceptance**, not another large abstraction. Configure/verify the `snowflake-certification` GitHub Environment and dedicated Snowflake WIF/database/roles/warehouse, run the trusted certification from exact `main`, and treat live failures as product evidence.
-
-After live certification, likely next work is a release-readiness gate that consumes existing candidate DQ/version comparison/runtime evidence without auto-approving or auto-cutting production.
