@@ -113,6 +113,7 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
         (self.root / "control_plane" / "sql" / "100_dynamic_table_observability.sql").unlink()
         (self.root / "control_plane" / "sql" / "110_pipeline_execution_metrics.sql").unlink()
         (self.root / "control_plane" / "sql" / "120_release_readiness.sql").unlink()
+        (self.root / "control_plane" / "sql" / "130_health_evaluation_cadence.sql").unlink()
         (self.root / "dbt" / "macros" / "esf_observability.sql").unlink()
         (self.root / "dbt" / "README.md").unlink()
         (self.root / "ingestion" / "RUN_EVIDENCE.md").unlink()
@@ -129,6 +130,7 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
         self.assertTrue((self.root / "control_plane" / "sql" / "100_dynamic_table_observability.sql").is_file())
         self.assertTrue((self.root / "control_plane" / "sql" / "110_pipeline_execution_metrics.sql").is_file())
         self.assertTrue((self.root / "control_plane" / "sql" / "120_release_readiness.sql").is_file())
+        self.assertTrue((self.root / "control_plane" / "sql" / "130_health_evaluation_cadence.sql").is_file())
         self.assertTrue((self.root / "dbt" / "macros" / "esf_observability.sql").is_file())
         self.assertTrue((self.root / "ingestion" / "RUN_EVIDENCE.md").is_file())
 
@@ -143,6 +145,7 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
                 "control_plane/sql/100_dynamic_table_observability.sql",
                 "control_plane/sql/110_pipeline_execution_metrics.sql",
                 "control_plane/sql/120_release_readiness.sql",
+                "control_plane/sql/130_health_evaluation_cadence.sql",
             ),
             plan.missing_from_manifest,
         )
