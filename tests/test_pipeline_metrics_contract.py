@@ -44,18 +44,28 @@ def sql_for(pattern: str) -> str:
 
 
 class PipelineMetricsContractTests(unittest.TestCase):
-    def test_all_explicit_apply_patterns_capture_canonical_primary_dml_evidence(self) -> None:
+    def test_all_explicit_apply_patterns_write_the_same_canonical_columns(self) -> None:
         for pattern in ("append", "full_refresh", "scd1", "scd2"):
             with self.subTest(pattern=pattern):
                 sql = sql_for(pattern)
-                self.assertIn("V_ROWS_AFFECTED := SQLROWCOUNT;", sql)
-                self.assertIn("V_DML_QUERY_ID := SQLID;", sql)
                 self.assertIn("ROWS_AFFECTED = :V_ROWS_AFFECTED", sql)
                 self.assertIn("AFFECTED_BUSINESS_KEYS = :V_AFFECTED_BUSINESS_KEYS", sql)
                 self.assertIn("DML_QUERY_ID = :V_DML_QUERY_ID", sql)
                 self.assertIn("QUERY_ID = :V_DML_QUERY_ID", sql)
                 self.assertIn("METRICS_CONTRACT_VERSION = 1", sql)
                 self.assertNotIn("QUERY_ID = LAST_QUERY_ID()", sql)
+
+        for pattern in ("append", "full_refresh", "scd1"):
+            with self.subTest(primary_capture=pattern):
+                sql = sql_for(pattern)
+                self.assertIn("V_ROWS_AFFECTED := SQLROWCOUNT;", sql)
+                self.assertIn("V_DML_QUERY_ID := SQLID;", sql)
+
+        scd2 = sql_for("scd2")
+        self.assertIn("V_HISTORY_ROWS_REBUILT := SQLROWCOUNT;", scd2)
+        self.assertIn("V_HISTORY_REBUILD_QUERY_ID := SQLID;", scd2)
+        self.assertIn("V_ROWS_AFFECTED := V_HISTORY_ROWS_REBUILT;", scd2)
+        self.assertIn("V_DML_QUERY_ID := V_HISTORY_REBUILD_QUERY_ID;", scd2)
 
     def test_scd1_never_labels_total_merge_rowcount_as_rows_updated(self) -> None:
         sql = sql_for("scd1")
