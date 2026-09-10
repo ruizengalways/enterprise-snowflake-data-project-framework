@@ -12,6 +12,7 @@ KNOWN_CONTROL_SQL = (
     "control_plane/sql/050_dataset_lifecycle_status.sql",
     "control_plane/sql/060_run_evidence_api.sql",
     "control_plane/sql/070_enterprise_health_export.sql",
+    "control_plane/sql/080_data_quality_reconciliation.sql",
 )
 
 
