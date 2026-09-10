@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "enterprise-snowflake-data-project-framework"
-version = "0.23.0"
-description = "Snowflake domain pipeline scaffolding with version-local Task operational policy, immutable template provenance, read-only upgrade advisories, guarded release readiness, canonical run metrics, execution-model separation, first-class Dynamic Tables, apply-once migrations, fail-closed DDL, trusted certification, reviewed contracts and domain-local observability"
+version = "0.24.0"
+description = "Snowflake domain pipeline scaffolding with explicit domain health cadence operations, version-local Task operational policy, immutable template provenance, read-only upgrade advisories, guarded release readiness, canonical run metrics, execution-model separation, first-class Dynamic Tables, apply-once migrations, fail-closed DDL, trusted certification, reviewed contracts and domain-local observability"
 requires-python = ">=3.11"
 dependencies = [
   "jsonschema>=4.23,<5",
