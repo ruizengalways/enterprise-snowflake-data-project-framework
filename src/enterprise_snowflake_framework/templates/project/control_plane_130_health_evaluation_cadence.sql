@@ -8,8 +8,11 @@
 -- Actual Task state/schedule should be verified with SHOW TASKS. This table records only
 -- Framework-generated change attempts; it is not a runtime scheduler or source of truth
 -- for out-of-band Task edits.
+--
+-- These are new Framework-owned Control objects. Creation is intentionally fail-closed:
+-- an unexpected pre-existing name is an ownership conflict and must not be silently accepted.
 
-CREATE TABLE IF NOT EXISTS CONTROL.HEALTH_EVALUATION_CHANGE (
+CREATE TABLE CONTROL.HEALTH_EVALUATION_CHANGE (
     OPERATION_ID VARCHAR NOT NULL,
     TASK_NAME VARCHAR NOT NULL,
     INTERVAL_SECONDS NUMBER(38,0) NOT NULL,
@@ -22,7 +25,7 @@ CREATE TABLE IF NOT EXISTS CONTROL.HEALTH_EVALUATION_CHANGE (
     CREATED_AT TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP()
 );
 
-CREATE VIEW IF NOT EXISTS CONTROL.HEALTH_EVALUATION_CONFIG_V AS
+CREATE VIEW CONTROL.HEALTH_EVALUATION_CONFIG_V AS
 SELECT
     OPERATION_ID,
     TASK_NAME,
