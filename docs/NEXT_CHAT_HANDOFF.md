@@ -1,234 +1,204 @@
 # Next chat handoff
 
-Use this file first when continuing the Framework in a new conversation, then read `docs/CURRENT_CONTEXT.md`.
+Read this file first when continuing the Framework in a new conversation, then read `docs/CURRENT_CONTEXT.md` and `docs/architecture/EXECUTION_MODELS.md`.
 
-## Repository and stable baseline
+## Repository status
 
 ```text
 repository = ruizengalways/enterprise-snowflake-data-project-framework
-main       = e578a1cde76a6dee2b5dfd41f07aa390d9b65c71
-version    = 0.18.0
+stable main before this feature = 4513df6d37953bd8b13660124281fafbd49a4ebb
+stable version before this feature = 0.18.0
+feature branch = feature/execution-model-dynamic-table
+planned version = 0.19.0
 ```
 
-PR #25 (`feat: add trusted real-Snowflake certification suite`) is merged.
+The 0.19 work separates logical dataset semantics from implementation technology and adds first-class Dynamic Table support. Do not redesign that model in the next conversation; finish the current PR/CI/merge path first.
 
-Verification for the merge SHA:
+## Architecture contract
+
+The key rule is:
 
 ```text
-Silver-first Toolkit CI #245 = SUCCESS
-Snowflake Framework Certification run #1 = SKIPPED
+logical dataset
+  pattern = semantic behavior
+
+implementation version
+  execution_model = Snowflake execution technology
 ```
 
-The certification run was created by the successful `main` workflow-run event and its credentialed `certify` job was skipped. This is the intended safe behavior while live certification is not enabled/configured.
+`pattern` remains in the source manifest and logical `CONTROL.DATASET` metadata:
 
-Do **not** call `e578a1c...` Snowflake-certified yet. The certification layer is implemented, but no real Snowflake run has produced a `CERTIFIED` artifact for this SHA.
+```text
+append
+full_refresh
+scd1
+scd2
+custom
+```
 
-## Stable architecture
+`execution_model` is version-specific:
 
-The Framework is a developer toolkit/bootstrapper, not a production metadata interpreter.
+```text
+stream_task
+dynamic_table
+batch_sql
+custom
+```
 
-Stable decisions:
+Do not add `procedure` as an execution model. A procedure is an implementation artifact used by some execution models, not a peer of Stream+Task or Dynamic Table.
+
+Compatibility is deliberately fail-closed in 0.19:
+
+```text
+append       + stream_task   = supported
+full_refresh + stream_task   = supported
+full_refresh + dynamic_table = supported
+full_refresh + batch_sql     = supported
+scd1         + stream_task   = supported
+scd1         + dynamic_table = supported
+scd2         + stream_task   = supported
+custom       + custom        = supported/domain-owned
+
+scd2         + dynamic_table = rejected
+append       + dynamic_table = rejected
+other unimplemented combinations = rejected
+```
+
+Do not broaden this matrix until equivalent semantics are explicitly implemented and certified.
+
+## Generated implementation layouts
+
+Legacy/default standard implementations remain `stream_task`, so existing domain behavior remains compatible.
+
+A Stream+Task implementation owns the familiar explicit files such as object, apply, replay, validation, Task, registration and publication SQL.
+
+A Dynamic Table implementation must not contain meaningless placeholder Stream/Task/procedure files. Its generated ownership unit is intentionally smaller:
+
+```text
+version.yml
+001_dynamic_table.sql
+020_validate.sql
+025_compare.sql
+040_register.sql
+050_publish.sql
+060_policy.sql
+deploy_manifest.fragment.txt
+README.md
+```
+
+Dynamic Table DQ is explicit dataset-local SQL that writes normalized `CONTROL.DQ_RESULT` evidence. The Framework does not create a fake apply procedure or fake pipeline-run ledger to make Dynamic Tables look like Stream+Task.
+
+## Version metadata and Control Plane
+
+New version contracts explicitly record `execution_model`. Legacy version files without it remain readable and default to `stream_task` for previously generated standard implementations.
+
+Do not modify released Control migrations 001..080. New apply-once migrations are:
+
+```text
+090_dataset_execution_model.sql
+100_dynamic_table_observability.sql
+```
+
+090 adds version-level execution metadata, including `EXECUTION_MODEL` and `PRIMARY_RUNTIME_OBJECT`, and backfills historical standard versions as `stream_task` where appropriate.
+
+100 normalizes Dynamic Table runtime evidence from Snowflake-native `INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY`; it does not fabricate `CONTROL.PIPELINE_RUN` rows. `CONTROL.DATASET_OBSERVABILITY_V` chooses the evidence source based on the active version's execution model.
+
+When upgrading an existing populated domain, rerun `esf init-project` to materialize missing migration files, review `esf control-plan`, append 090/100 to the domain-owned control manifest without reordering prior applied entries, and let `esf-control-preflight` enforce readiness.
+
+## Dynamic Table execution contract
+
+For `scd1 + dynamic_table`, current state is declarative: select the latest event per business key by the reviewed ordering tuple and filter tombstones. This preserves the SCD1 rule introduced in 0.18: late/out-of-order older evidence must not regress current state.
+
+For `full_refresh + dynamic_table`, the Dynamic Table declares the current Bronze snapshot result.
+
+Dynamic Table configuration is version policy, not logical SLA:
+
+```text
+target_lag   = Snowflake staleness target
+refresh_mode = explicit incremental/full choice
+warehouse    = Dynamic Table refresh warehouse
+
+CONTROL.SLA_POLICY = separate business SLA
+```
+
+The Framework deliberately does not generate refresh mode `AUTO` in this first version.
+
+## Lifecycle, release and repair
+
+Lifecycle is execution-model aware:
+
+```text
+stream_task   -> ALTER TASK ... SUSPEND / RESUME
+dynamic_table -> ALTER DYNAMIC TABLE ... SUSPEND / RESUME
+batch_sql     -> coordinate the external scheduler explicitly
+custom        -> domain-authored
+```
+
+Release may cross execution technologies. The reference 0.19 scenario is:
+
+```text
+customer v1: pattern=scd1, execution_model=stream_task
+customer v2: pattern=scd1, execution_model=dynamic_table
+```
+
+Candidate deployment does not change stable consumer views. Explicit release/rollback still uses stable published views with `COPY GRANTS`. A Dynamic Table candidate is refreshed/validated before publication; old processing is retired only after publication/control updates.
+
+Repair must not assume every candidate has a replay procedure or Task. Dynamic Table candidate repair uses explicit refresh/rebuild semantics and rejects bounded replay when that execution model cannot represent it safely.
+
+## Certification
+
+The trusted Snowflake certification layer remains post-main/approved and credential-free on untrusted PRs.
+
+0.19 extends certification with a real cross-execution-model scenario:
+
+```text
+SCD1 v1 stream_task
+  -> create v2 dynamic_table
+  -> initial Dynamic Table refresh
+  -> verify late/out-of-order equivalent current state
+  -> insert new Bronze evidence after candidate creation
+  -> v1 consumes through apply/Stream
+  -> v2 refreshes natively
+  -> compare outputs
+  -> validate DQ
+  -> verify native Dynamic Table refresh history
+  -> cut over stable view with COPY GRANTS
+  -> verify active health/runtime metadata
+  -> rollback
+```
+
+Only a real Snowflake workflow artifact with `status = CERTIFIED` for the exact main SHA permits calling that SHA Snowflake-certified. Static CI alone is not certification.
+
+## Stable guardrails that remain unchanged
 
 - one business domain = one independent domain repository;
-- normally one Snowflake domain database per environment/account;
-- one domain may contain many sources;
-- source boundaries remain visible in repo paths and Snowflake object names;
-- RAW contracts are reviewed engineering declarations, not discovery output;
-- standard Silver patterns are `append`, `scd1`, `scd2`, `full_refresh`, plus domain-authored `custom`;
-- generated SQL becomes ordinary domain-owned source code;
-- no central SCD engine, runtime metadata routing, universal ingestion runtime or deployment-time scaffolding;
-- every domain owns its writable `CONTROL` schema;
-- enterprise health is read-only aggregation of domain health exports;
-- DQ rules remain dataset-local SQL and CONTROL stores normalized evidence;
-- repair/release/lifecycle/SLA operations generate reviewable SQL and never auto-execute production changes;
-- candidate versions own independent physical objects/streams/tasks/procedures and do not publish until explicit release;
-- CONTROL and SILVER deployment is checksum-locked apply-once;
-- applied migration path/checksum/manifest position are immutable;
-- failed/started migrations block until explicit remediation;
-- existing populated domains require explicit migration baseline adoption;
+- one domain may contain many source systems;
+- source profiling/discovery stays outside this Framework;
+- RAW contracts require human review;
+- generated SQL becomes domain-owned source code;
+- no universal runtime metadata routing;
+- no central SCD engine;
+- no deployment-time scaffolding;
+- CONTROL and SILVER use checksum-locked apply-once migrations;
+- applied migration path/checksum/position are immutable;
+- failed/started migrations block until reviewed remediation;
 - new persistent version-owned objects are create-only/fail-closed;
-- stable published views are replaced only during explicit release/rollback with `COPY GRANTS`;
-- release starts candidate processing before publication where applicable and suspends old processing last;
-- dbt remains desired-state and runs on each normal deployment.
+- published view replacement is limited to explicit release/rollback and uses `COPY GRANTS`;
+- dbt begins at trusted Silver and remains Gold/Mart/Semantic execution, never Bronze->Silver.
 
-## Trusted real-Snowflake certification now on main
+## Immediate next steps
 
-Files:
+In the next conversation, do this in order:
 
-```text
-.github/workflows/snowflake-certification.yml
-certification/README.md
-certification/fixtures/canonical.yml
-docs/architecture/SNOWFLAKE_CERTIFICATION.md
-scripts/run_snowflake_certification.py
-src/enterprise_snowflake_framework/certification_project.py
-src/enterprise_snowflake_framework/certification_snowflake.py
-src/enterprise_snowflake_framework/certification_scenarios.py
-tests/test_snowflake_certification_contract.py
-```
+1. read this file, `docs/CURRENT_CONTEXT.md`, and `docs/architecture/EXECUTION_MODELS.md`;
+2. re-check `main`, `feature/execution-model-dynamic-table`, open PRs and CI before writing;
+3. inspect the final branch diff for accidental changes to released migrations or previous DDL/apply-once safety contracts;
+4. run/open credential-free PR CI and fix real failures without weakening the execution-model contract;
+5. merge only after the complete suite is green;
+6. verify post-merge main CI;
+7. update this handoff again with the final main SHA, PR number, CI run and live-certification status;
+8. if Snowflake certification infrastructure is configured, run the trusted certification and treat any live failure as product evidence rather than weakening fixtures.
 
-Security boundary:
+Until the merge is complete, describe the state as:
 
-```text
-untrusted pull request
-  -> credential-free Framework CI only
-
-trusted main push CI success
-  -> optional post-main certification when explicitly enabled
-  -> GitHub Environment: snowflake-certification
-  -> GitHub OIDC / Snowflake WIF
-  -> dedicated CI_FRAMEWORK_CERT database only
-```
-
-The certification runner hard-requires:
-
-```text
-SNOWFLAKE_USER      = SU_GITHUB_FRAMEWORK_CERT
-SNOWFLAKE_ROLE      = AR_FRAMEWORK_CERT
-SNOWFLAKE_WAREHOUSE = WH_FRAMEWORK_CERT_TRANSFORM
-SNOWFLAKE_DATABASE  = CI_FRAMEWORK_CERT
-```
-
-Grant-preservation certification also requires the pre-provisioned probe role:
-
-```text
-AR_FRAMEWORK_CERT_READER
-```
-
-The runner resets only transient schemas inside `CI_FRAMEWORK_CERT`:
-
-```text
-CONTROL
-BRONZE
-SILVER
-```
-
-The workflow is globally serialized and cleanup is guarded by the same fixed certification boundary.
-
-## Certification matrix
-
-Canonical fixtures cover:
-
-```text
-APPEND
-- initial insert
-- duplicate delivery
-- native triggered Task/Stream execution
-
-SCD1
-- insert
-- update
-- duplicate
-- late arrival
-- delete/tombstone
-- reinsert
-- out-of-order event
-- older events must not regress current state when ordering evidence exists
-
-SCD2
-- insert
-- update
-- late-arriving history reconstruction
-- delete/tombstone
-- reinsert
-- full replay
-
-FULL_REFRESH
-- initial snapshot
-- manual EXECUTE TASK
-- replacement snapshot
-
-VERSION / RELEASE
-- v2 scaffold as later committed migrations
-- v2 bootstrap/replay
-- post-v2-stream catch-up event consumed independently by v1 and v2
-- DQ validation
-- version comparison evidence
-- explicit cutover
-- rollback
-- published-view SELECT grant preservation using AR_FRAMEWORK_CERT_READER
-
-MIGRATIONS
-- first apply
-- identical repeat = zero apply
-- checksum drift = block
-- intentional failed migration = FAILED evidence
-- failed migration retry = block
-
-DYNAMIC TABLE
-- NOT_APPLICABLE until a real Dynamic Table execution model exists
-```
-
-Expected results are asserted independently from the SQL renderer.
-
-## SCD1 correctness change introduced with 0.18.0
-
-Certification design exposed a real correctness risk in SCD1: a late-arriving older event could overwrite a newer current row.
-
-Generated SCD1 apply SQL now uses the declared ordering tuple to require an incoming event to be strictly newer than the stored row before matched update/delete is allowed. Equal ordering is duplicate/no-op; older ordering is ignored for current-state mutation.
-
-Do not weaken the certification fixture if Snowflake exposes another edge case. Treat the failing fixture as product evidence and fix the generator through a normal PR.
-
-## Required Snowflake/GitHub setup before first live certification
-
-Provision outside Framework runtime code:
-
-```text
-GitHub Environment: snowflake-certification
-GitHub environment vars:
-  SNOWFLAKE_ACCOUNT
-  SNOWFLAKE_OIDC_AUDIENCE
-
-Snowflake:
-  CI_FRAMEWORK_CERT
-  AR_FRAMEWORK_CERT
-  AR_FRAMEWORK_CERT_READER
-  SU_GITHUB_FRAMEWORK_CERT
-  WH_FRAMEWORK_CERT_TRANSFORM
-```
-
-Recommended WIF subject:
-
-```text
-repo:ruizengalways/enterprise-snowflake-data-project-framework:environment:snowflake-certification
-```
-
-Use an account-scoped OIDC audience.
-
-Effective certification role requirements include create/drop-schema rights inside the dedicated certification database, warehouse USAGE, global `EXECUTE TASK`, global `EXECUTE MANAGED TASK`, and authority to grant/revoke SELECT on the certification published view to the reader probe role.
-
-For the first live run, use manual dispatch from `main`. After that run is proven and environment protection is in place, set:
-
-```text
-ESF_SNOWFLAKE_CERTIFICATION_ENABLED=true
-```
-
-so successful main push CI automatically starts certification.
-
-## Status wording
-
-Until a real workflow artifact says `status = CERTIFIED` for the exact SHA, use this wording:
-
-> The Framework has a trusted Snowflake certification layer implemented, but this SHA has not yet been certified in a real Snowflake account.
-
-Successful artifacts are:
-
-```text
-snowflake-certification.json
-snowflake-certification.md
-```
-
-They record the exact Framework Git SHA and Snowflake version.
-
-## What to do next
-
-In the next conversation:
-
-1. read this file and `docs/CURRENT_CONTEXT.md`;
-2. re-check current `main`, open PRs and CI before modifying anything;
-3. do not rebuild the certification layer—it is already merged in 0.18.0;
-4. if certification infrastructure is still absent, provision the dedicated Snowflake/GitHub boundary described above;
-5. manually run `Snowflake Framework Certification` from `main` for the exact current trusted SHA;
-6. inspect the first real failure as product evidence and fix the Framework rather than weakening expected fixtures;
-7. only after a real successful run describe that exact SHA as Snowflake-certified;
-8. after certification is stable, the next major framework feature candidate is release-readiness gating or a separately justified Dynamic Table execution model—not additional generic runtime abstraction.
+> 0.18.0 is the stable main baseline. 0.19.0 execution-model/Dynamic Table support is implemented on the feature branch and still requires final PR CI and merge validation.
