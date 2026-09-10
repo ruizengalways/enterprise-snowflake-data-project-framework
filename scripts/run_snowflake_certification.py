@@ -7,6 +7,7 @@ from pathlib import Path
 
 from enterprise_snowflake_framework.certification_snowflake import (
     SnowflakeCertifier,
+    _required_environment,
     cleanup_certification_schemas,
 )
 from enterprise_snowflake_framework.migration_snowflake import SnowCliClient
@@ -36,6 +37,7 @@ def main() -> None:
         raise SystemExit("--framework-git-sha must be a lowercase 40-character Git SHA")
 
     client = SnowCliClient()
+    _required_environment(client.env)
     if args.cleanup_only:
         cleanup_certification_schemas(client)
         print("Snowflake certification schemas cleaned.")
