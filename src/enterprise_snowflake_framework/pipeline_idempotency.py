@@ -15,6 +15,22 @@ def _qualified(alias: str, columns: Sequence[str]) -> str:
     return ", ".join(f"{alias}.{column}" for column in columns)
 
 
+def _payload_signature(alias: str, columns: Sequence[str]) -> str:
+    if not columns:
+        raise ValueError("idempotency payload must contain at least one column")
+    return f"TO_JSON(ARRAY_CONSTRUCT_KEEP_NULL({_qualified(alias, columns)}))"
+
+
+def render_identity_join(left: str, right: str, identity_columns: Sequence[str]) -> str:
+    """Render a NULL-safe equality predicate for a reviewed idempotency identity."""
+    if not identity_columns:
+        raise ValueError("idempotency identity must contain at least one column")
+    return " AND ".join(
+        f"{left}.{column} IS NOT DISTINCT FROM {right}.{column}"
+        for column in identity_columns
+    )
+
+
 def render_idempotency_conflict_guard(
     relation: str,
     *,
@@ -25,18 +41,16 @@ def render_idempotency_conflict_guard(
     """Fail closed when one reviewed identity maps to conflicting payloads in one input batch."""
     if not identity_columns:
         raise ValueError("idempotency identity must contain at least one column")
-    if not payload_columns:
-        raise ValueError("idempotency payload must contain at least one column")
     identity = _qualified(alias, identity_columns)
-    payload = _qualified(alias, payload_columns)
+    payload_signature = _payload_signature(alias, payload_columns)
     return f"""        V_IDEMPOTENCY_CONFLICTS := (
             SELECT COUNT(*)
             FROM (
                 SELECT {identity}
                 FROM {relation} {alias}
                 GROUP BY {identity}
-                HAVING COUNT(DISTINCT TO_VARCHAR(HASH({payload}))) > 1
-            ) CONFLICTING_IDENTITIES
+                HAVING COUNT(DISTINCT {payload_signature}) > 1
+            ) AS ESF_IDEMPOTENCY_CONFLICTS
         );
         IF (V_IDEMPOTENCY_CONFLICTS > 0) THEN
             RAISE E_IDEMPOTENCY_CONFLICT;
@@ -55,15 +69,13 @@ def render_deduped_relation(
     """Collapse exact duplicate rows after conflict detection has proved payload agreement."""
     if not identity_columns:
         raise ValueError("idempotency identity must contain at least one column")
-    if not payload_columns:
-        raise ValueError("idempotency payload must contain at least one column")
     identity = _qualified("D", identity_columns)
-    payload = _qualified("D", payload_columns)
+    payload_signature = _payload_signature("D", payload_columns)
     return f"""(
             SELECT D.*
             FROM {relation} D
             QUALIFY ROW_NUMBER() OVER (
                 PARTITION BY {identity}
-                ORDER BY TO_VARCHAR(HASH({payload}))
+                ORDER BY {payload_signature}
             ) = 1
         ) {output_alias}"""
