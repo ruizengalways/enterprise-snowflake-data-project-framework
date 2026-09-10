@@ -8,27 +8,99 @@ from .pipeline_model import (
 )
 
 
-def _procedure_header(names: PipelineNames) -> str:
+METRICS_CONTRACT_VERSION = 1
+
+
+def _procedure_header(names: PipelineNames, *, extra_declarations: str = "") -> str:
     if not names.apply_procedure:
         raise ValueError(f"{names.execution_model} implementation has no apply procedure")
-    return f"""CREATE PROCEDURE {names.apply_procedure}()\nRETURNS OBJECT\nLANGUAGE SQL\nEXECUTE AS OWNER\nAS\n$$\nDECLARE\n    V_RUN_ID VARCHAR DEFAULT UUID_STRING();\n    V_ROWS_READ NUMBER DEFAULT 0;\n    V_ROWS_INSERTED NUMBER DEFAULT 0;\n    V_ROWS_UPDATED NUMBER DEFAULT 0;\n    V_ROWS_DELETED NUMBER DEFAULT 0;\n    V_DATA_MAX_AT TIMESTAMP_LTZ;\nBEGIN\n"""
+    return f"""-- Requires CONTROL migration 110_pipeline_execution_metrics.sql.
+-- Canonical metric rule: ROWS_AFFECTED is SQLROWCOUNT for DML_QUERY_ID's primary Silver DML.
+CREATE PROCEDURE {names.apply_procedure}()
+RETURNS OBJECT
+LANGUAGE SQL
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_RUN_ID VARCHAR DEFAULT UUID_STRING();
+    V_ROWS_READ NUMBER DEFAULT 0;
+    V_ROWS_AFFECTED NUMBER DEFAULT 0;
+    V_AFFECTED_BUSINESS_KEYS NUMBER DEFAULT 0;
+    V_DML_QUERY_ID VARCHAR;
+    V_ROWS_INSERTED NUMBER;
+    V_ROWS_UPDATED NUMBER;
+    V_ROWS_DELETED NUMBER;
+    V_DATA_MAX_AT TIMESTAMP_LTZ;
+    V_METRICS VARIANT DEFAULT OBJECT_CONSTRUCT();
+{extra_declarations}BEGIN
+"""
 
 
 def _running_log(names: PipelineNames) -> str:
     task_value = f"'{names.task}'" if names.task else "NULL"
-    return f"""    INSERT INTO CONTROL.PIPELINE_RUN (\n        RUN_ID, DATASET_ID, VERSION, STATUS, STARTED_AT, TASK_NAME, WAREHOUSE_NAME\n    )\n    SELECT\n        :V_RUN_ID, '{names.dataset_key}', '{names.version}', 'RUNNING',\n        CURRENT_TIMESTAMP(), {task_value}, CURRENT_WAREHOUSE();\n"""
+    return f"""    INSERT INTO CONTROL.PIPELINE_RUN (
+        RUN_ID, DATASET_ID, VERSION, STATUS, STARTED_AT, TASK_NAME, WAREHOUSE_NAME,
+        METRICS_CONTRACT_VERSION
+    )
+    SELECT
+        :V_RUN_ID, '{names.dataset_key}', '{names.version}', 'RUNNING',
+        CURRENT_TIMESTAMP(), {task_value}, CURRENT_WAREHOUSE(), {METRICS_CONTRACT_VERSION};
+"""
 
 
 def _success_log() -> str:
-    return """    UPDATE CONTROL.PIPELINE_RUN\n    SET STATUS = 'SUCCESS',\n        COMPLETED_AT = CURRENT_TIMESTAMP(),\n        ROWS_READ = :V_ROWS_READ,\n        ROWS_INSERTED = :V_ROWS_INSERTED,\n        ROWS_UPDATED = :V_ROWS_UPDATED,\n        ROWS_DELETED = :V_ROWS_DELETED,\n        BRONZE_DATA_MAX_AT = :V_DATA_MAX_AT,\n        SILVER_DATA_MAX_AT = :V_DATA_MAX_AT,\n        SILVER_PUBLISHED_AT = CURRENT_TIMESTAMP(),\n        QUERY_ID = LAST_QUERY_ID()\n    WHERE RUN_ID = :V_RUN_ID;\n"""
+    return f"""    UPDATE CONTROL.PIPELINE_RUN
+    SET STATUS = 'SUCCESS',
+        COMPLETED_AT = CURRENT_TIMESTAMP(),
+        ROWS_READ = :V_ROWS_READ,
+        ROWS_AFFECTED = :V_ROWS_AFFECTED,
+        AFFECTED_BUSINESS_KEYS = :V_AFFECTED_BUSINESS_KEYS,
+        BRONZE_DATA_MAX_AT = :V_DATA_MAX_AT,
+        SILVER_DATA_MAX_AT = :V_DATA_MAX_AT,
+        SILVER_PUBLISHED_AT = CURRENT_TIMESTAMP(),
+        DML_QUERY_ID = :V_DML_QUERY_ID,
+        QUERY_ID = :V_DML_QUERY_ID,
+        METRICS_CONTRACT_VERSION = {METRICS_CONTRACT_VERSION},
+        METRICS = :V_METRICS,
+        -- Legacy breakdown fields are only populated when their meaning is unambiguous.
+        ROWS_INSERTED = :V_ROWS_INSERTED,
+        ROWS_UPDATED = :V_ROWS_UPDATED,
+        ROWS_DELETED = :V_ROWS_DELETED
+    WHERE RUN_ID = :V_RUN_ID;
+"""
 
 
 def _result_and_end() -> str:
-    return """    RETURN OBJECT_CONSTRUCT(\n        'run_id', V_RUN_ID,\n        'rows_read', V_ROWS_READ,\n        'rows_inserted', V_ROWS_INSERTED,\n        'rows_updated', V_ROWS_UPDATED,\n        'rows_deleted', V_ROWS_DELETED\n    );\nEND;\n$$;\n"""
+    return """    RETURN OBJECT_CONSTRUCT(
+        'run_id', V_RUN_ID,
+        'metrics_contract_version', 1,
+        'rows_read', V_ROWS_READ,
+        'rows_affected', V_ROWS_AFFECTED,
+        'affected_business_keys', V_AFFECTED_BUSINESS_KEYS,
+        'dml_query_id', V_DML_QUERY_ID,
+        'metrics', V_METRICS
+    );
+END;
+$$;
+"""
 
 
 def _transaction_failure_block() -> str:
-    return """        COMMIT;\n    EXCEPTION\n        WHEN OTHER THEN\n            ROLLBACK;\n            UPDATE CONTROL.PIPELINE_RUN\n            SET STATUS = 'FAILED',\n                COMPLETED_AT = CURRENT_TIMESTAMP(),\n                ERROR_CODE = TO_VARCHAR(SQLCODE),\n                ERROR_MESSAGE = SQLERRM\n            WHERE RUN_ID = :V_RUN_ID;\n            RAISE;\n    END;\n\n"""
+    return """        COMMIT;
+    EXCEPTION
+        WHEN OTHER THEN
+            ROLLBACK;
+            UPDATE CONTROL.PIPELINE_RUN
+            SET STATUS = 'FAILED',
+                COMPLETED_AT = CURRENT_TIMESTAMP(),
+                ERROR_CODE = TO_VARCHAR(SQLCODE),
+                ERROR_MESSAGE = SQLERRM
+            WHERE RUN_ID = :V_RUN_ID;
+            RAISE;
+    END;
+
+"""
 
 
 def _strictly_newer_expression(incoming: str, existing: str, ordering: list[str]) -> str:
@@ -44,6 +116,11 @@ def _strictly_newer_expression(incoming: str, existing: str, ordering: list[str]
             clauses.append(f"({comparison})")
         equal_prefix.append(f"{incoming}.{column} = {existing}.{column}")
     return "(" + " OR ".join(clauses) + ")"
+
+
+def _distinct_business_keys(relation: str, business_key: list[str]) -> str:
+    keys = _csv(business_key)
+    return f"(SELECT COUNT(*) FROM (SELECT DISTINCT {keys} FROM {relation}))"
 
 
 def freshness_column(contract: dict[str, Any]) -> str | None:
@@ -68,7 +145,16 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
             "-- Keep production transformation explicit in this file.\n"
         )
 
-    header = _procedure_header(names)
+    extra_declarations = ""
+    if pattern == "scd2":
+        extra_declarations = """    V_EVENTS_INSERTED NUMBER DEFAULT 0;
+    V_EVENTS_INSERT_QUERY_ID VARCHAR;
+    V_HISTORY_ROWS_DELETED NUMBER DEFAULT 0;
+    V_HISTORY_DELETE_QUERY_ID VARCHAR;
+    V_HISTORY_ROWS_REBUILT NUMBER DEFAULT 0;
+    V_HISTORY_REBUILD_QUERY_ID VARCHAR;
+"""
+    header = _procedure_header(names, extra_declarations=extra_declarations)
     running = _running_log(names)
     success = _success_log()
     end = _result_and_end()
@@ -78,11 +164,64 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
         assert names.stream and names.physical_relation
         new_defs = _column_defs(contract)
         dedup = _join("T", "N", idempotency)
-        return f"""{header}    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_NEW_EVENTS (\n{new_defs}\n    );\n\n{running}    BEGIN\n        BEGIN TRANSACTION;\n\n        INSERT INTO ESF_NEW_EVENTS ({_csv(columns)})\n        SELECT {_csv(columns)}\n        FROM {names.stream}\n        WHERE METADATA$ACTION = 'INSERT';\n\n        V_ROWS_READ := (SELECT COUNT(*) FROM ESF_NEW_EVENTS);\n        V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM ESF_NEW_EVENTS);\n\n        INSERT INTO {names.physical_relation} ({_csv(columns)}, ESF_LOADED_AT)\n        SELECT {_csv(columns, 'N')}, CURRENT_TIMESTAMP()\n        FROM ESF_NEW_EVENTS N\n        WHERE NOT EXISTS (\n            SELECT 1\n            FROM {names.physical_relation} T\n            WHERE {dedup}\n        );\n\n        V_ROWS_INSERTED := SQLROWCOUNT;\n{tx_failure}{success}{end}"""
+        return f"""{header}    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_NEW_EVENTS (
+{new_defs}
+    );
+
+{running}    BEGIN
+        BEGIN TRANSACTION;
+
+        INSERT INTO ESF_NEW_EVENTS ({_csv(columns)})
+        SELECT {_csv(columns)}
+        FROM {names.stream}
+        WHERE METADATA$ACTION = 'INSERT';
+
+        V_ROWS_READ := (SELECT COUNT(*) FROM ESF_NEW_EVENTS);
+        V_AFFECTED_BUSINESS_KEYS := {_distinct_business_keys('ESF_NEW_EVENTS', business_key)};
+        V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM ESF_NEW_EVENTS);
+
+        INSERT INTO {names.physical_relation} ({_csv(columns)}, ESF_LOADED_AT)
+        SELECT {_csv(columns, 'N')}, CURRENT_TIMESTAMP()
+        FROM ESF_NEW_EVENTS N
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM {names.physical_relation} T
+            WHERE {dedup}
+        );
+
+        -- Capture DML evidence immediately. Do not call LAST_QUERY_ID() after logging statements.
+        V_ROWS_AFFECTED := SQLROWCOUNT;
+        V_DML_QUERY_ID := SQLID;
+        V_ROWS_INSERTED := V_ROWS_AFFECTED;
+        V_ROWS_UPDATED := 0;
+        V_ROWS_DELETED := 0;
+        V_METRICS := OBJECT_CONSTRUCT(
+            'output_rows_inserted', V_ROWS_AFFECTED,
+            'primary_dml_query_id', V_DML_QUERY_ID
+        );
+{tx_failure}{success}{end}"""
 
     if pattern == "full_refresh":
         assert names.physical_relation
-        return f"""{header}{running}    BEGIN\n        BEGIN TRANSACTION;\n\n        V_ROWS_READ := (SELECT COUNT(*) FROM {names.bronze_relation});\n        V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM {names.bronze_relation});\n\n        INSERT OVERWRITE INTO {names.physical_relation} ({_csv(columns)}, ESF_LOADED_AT)\n        SELECT {_csv(columns)}, CURRENT_TIMESTAMP()\n        FROM {names.bronze_relation};\n\n        V_ROWS_INSERTED := SQLROWCOUNT;\n{tx_failure}{success}{end}"""
+        return f"""{header}{running}    BEGIN
+        BEGIN TRANSACTION;
+
+        V_ROWS_READ := (SELECT COUNT(*) FROM {names.bronze_relation});
+        V_AFFECTED_BUSINESS_KEYS := {_distinct_business_keys(names.bronze_relation, business_key)};
+        V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM {names.bronze_relation});
+
+        INSERT OVERWRITE INTO {names.physical_relation} ({_csv(columns)}, ESF_LOADED_AT)
+        SELECT {_csv(columns)}, CURRENT_TIMESTAMP()
+        FROM {names.bronze_relation};
+
+        V_ROWS_AFFECTED := SQLROWCOUNT;
+        V_DML_QUERY_ID := SQLID;
+        V_ROWS_INSERTED := V_ROWS_AFFECTED;
+        V_METRICS := OBJECT_CONSTRUCT(
+            'snapshot_rows_written', V_ROWS_AFFECTED,
+            'primary_dml_query_id', V_DML_QUERY_ID
+        );
+{tx_failure}{success}{end}"""
 
     if pattern == "scd1":
         assert names.stream and names.physical_relation
@@ -93,7 +232,58 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
         newer = _strictly_newer_expression("N", "T", ordering)
         updates = [name for name in columns if name not in business_key]
         update_set = ",\n            ".join(f"T.{name} = N.{name}" for name in updates)
-        return f"""{header}    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_NEW_EVENTS (\n{new_defs},\n        ESF_STREAM_ACTION VARCHAR NOT NULL,\n        ESF_STREAM_ISUPDATE BOOLEAN NOT NULL\n    );\n\n{running}    BEGIN\n        BEGIN TRANSACTION;\n\n        INSERT INTO ESF_NEW_EVENTS ({_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE)\n        SELECT\n            {_csv(columns)},\n            METADATA$ACTION,\n            METADATA$ISUPDATE\n        FROM {names.stream}\n        WHERE NOT (METADATA$ACTION = 'DELETE' AND METADATA$ISUPDATE);\n\n        V_ROWS_READ := (SELECT COUNT(*) FROM ESF_NEW_EVENTS);\n        V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM ESF_NEW_EVENTS);\n\n        MERGE INTO {names.physical_relation} T\n        USING (\n            SELECT *\n            FROM ESF_NEW_EVENTS\n            QUALIFY ROW_NUMBER() OVER (\n                PARTITION BY {_csv(business_key)}\n                ORDER BY {order_desc}\n            ) = 1\n        ) N\n        ON {join}\n        WHEN MATCHED AND {newer} AND {delete_expr} THEN DELETE\n        WHEN MATCHED AND {newer} THEN UPDATE SET\n            {update_set},\n            T.ESF_LOADED_AT = CURRENT_TIMESTAMP()\n        WHEN NOT MATCHED AND NOT {delete_expr} THEN INSERT (\n            {_csv(columns)}, ESF_LOADED_AT\n        ) VALUES (\n            {_csv(columns, 'N')}, CURRENT_TIMESTAMP()\n        );\n\n        V_ROWS_UPDATED := SQLROWCOUNT;\n{tx_failure}{success}{end}"""
+        return f"""{header}    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_NEW_EVENTS (
+{new_defs},
+        ESF_STREAM_ACTION VARCHAR NOT NULL,
+        ESF_STREAM_ISUPDATE BOOLEAN NOT NULL
+    );
+
+{running}    BEGIN
+        BEGIN TRANSACTION;
+
+        INSERT INTO ESF_NEW_EVENTS ({_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE)
+        SELECT
+            {_csv(columns)},
+            METADATA$ACTION,
+            METADATA$ISUPDATE
+        FROM {names.stream}
+        WHERE NOT (METADATA$ACTION = 'DELETE' AND METADATA$ISUPDATE);
+
+        V_ROWS_READ := (SELECT COUNT(*) FROM ESF_NEW_EVENTS);
+        V_AFFECTED_BUSINESS_KEYS := {_distinct_business_keys('ESF_NEW_EVENTS', business_key)};
+        V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM ESF_NEW_EVENTS);
+
+        -- A late or out-of-order event must not regress the stored current state when
+        -- the reviewed RAW contract provides ordering evidence.
+        MERGE INTO {names.physical_relation} T
+        USING (
+            SELECT *
+            FROM ESF_NEW_EVENTS
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY {_csv(business_key)}
+                ORDER BY {order_desc}
+            ) = 1
+        ) N
+        ON {join}
+        WHEN MATCHED AND {newer} AND {delete_expr} THEN DELETE
+        WHEN MATCHED AND {newer} THEN UPDATE SET
+            {update_set},
+            T.ESF_LOADED_AT = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED AND NOT {delete_expr} THEN INSERT (
+            {_csv(columns)}, ESF_LOADED_AT
+        ) VALUES (
+            {_csv(columns, 'N')}, CURRENT_TIMESTAMP()
+        );
+
+        -- SQLROWCOUNT is total MERGE rows affected, not update-only. Keep legacy
+        -- insert/update/delete fields NULL rather than writing a misleading breakdown.
+        V_ROWS_AFFECTED := SQLROWCOUNT;
+        V_DML_QUERY_ID := SQLID;
+        V_METRICS := OBJECT_CONSTRUCT(
+            'merge_rows_affected', V_ROWS_AFFECTED,
+            'primary_dml_query_id', V_DML_QUERY_ID
+        );
+{tx_failure}{success}{end}"""
 
     if pattern == "scd2":
         assert names.stream and names.events_relation and names.history_relation
@@ -108,6 +298,130 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
         delete_expr = _delete_expression(contract, "E")
         order_e = ", ".join(f"E.{name}" for name in ordering)
         order_plain = ", ".join(ordering)
-        return f"""{header}    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_NEW_EVENTS (\n{new_defs},\n        ESF_STREAM_ACTION VARCHAR NOT NULL,\n        ESF_STREAM_ISUPDATE BOOLEAN NOT NULL\n    );\n\n    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_AFFECTED_KEYS (\n{key_defs}\n    );\n\n{running}    BEGIN\n        BEGIN TRANSACTION;\n\n        INSERT INTO ESF_NEW_EVENTS ({_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE)\n        SELECT\n            {_csv(columns)},\n            METADATA$ACTION,\n            METADATA$ISUPDATE\n        FROM {names.stream}\n        WHERE NOT (METADATA$ACTION = 'DELETE' AND METADATA$ISUPDATE);\n\n        V_ROWS_READ := (SELECT COUNT(*) FROM ESF_NEW_EVENTS);\n        V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM ESF_NEW_EVENTS);\n\n        INSERT INTO {names.events_relation} (\n            {_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE, ESF_EVENT_HASH, ESF_CAPTURED_AT\n        )\n        SELECT\n            {_csv(columns, 'N')},\n            N.ESF_STREAM_ACTION,\n            N.ESF_STREAM_ISUPDATE,\n            TO_VARCHAR(HASH({_csv(columns, 'N')}, N.ESF_STREAM_ACTION)),\n            CURRENT_TIMESTAMP()\n        FROM ESF_NEW_EVENTS N\n        WHERE NOT EXISTS (\n            SELECT 1\n            FROM {names.events_relation} E\n            WHERE {dedup}\n        );\n\n        V_ROWS_INSERTED := SQLROWCOUNT;\n\n        INSERT INTO ESF_AFFECTED_KEYS ({_csv(business_key)})\n        SELECT DISTINCT {_csv(business_key)}\n        FROM ESF_NEW_EVENTS;\n\n        DELETE FROM {names.history_relation} H\n        USING ESF_AFFECTED_KEYS K\n        WHERE {affected_history};\n\n        INSERT INTO {names.history_relation} (\n            {_csv(columns)}, VALID_FROM, VALID_TO, IS_ACTIVE, ESF_VERSION_HASH, ESF_BUILT_AT\n        )\n        WITH ORDERED_EVENTS AS (\n            SELECT\n                E.*,\n                {state_hash} AS ESF_STATE_HASH,\n                {delete_expr} AS ESF_IS_DELETE,\n                LAG({state_hash}) OVER (\n                    PARTITION BY {_csv(business_key, 'E')}\n                    ORDER BY {order_e}\n                ) AS ESF_PREV_STATE_HASH,\n                LAG({delete_expr}) OVER (\n                    PARTITION BY {_csv(business_key, 'E')}\n                    ORDER BY {order_e}\n                ) AS ESF_PREV_IS_DELETE\n            FROM {names.events_relation} E\n            JOIN ESF_AFFECTED_KEYS K\n              ON {affected_events}\n        ),\n        BOUNDARY_EVENTS AS (\n            SELECT\n                *,\n                IFF(\n                    ESF_IS_DELETE\n                    OR ESF_PREV_STATE_HASH IS NULL\n                    OR COALESCE(ESF_PREV_IS_DELETE, FALSE)\n                    OR ESF_STATE_HASH <> ESF_PREV_STATE_HASH,\n                    TRUE,\n                    FALSE\n                ) AS ESF_IS_BOUNDARY\n            FROM ORDERED_EVENTS\n        ),\n        VERSION_BOUNDARIES AS (\n            SELECT\n                *,\n                LEAD({source_timestamp}) OVER (\n                    PARTITION BY {_csv(business_key)}\n                    ORDER BY {order_plain}\n                ) AS ESF_NEXT_BOUNDARY_AT\n            FROM BOUNDARY_EVENTS\n            WHERE ESF_IS_BOUNDARY\n        )\n        SELECT\n            {_csv(columns)},\n            {source_timestamp},\n            ESF_NEXT_BOUNDARY_AT,\n            ESF_NEXT_BOUNDARY_AT IS NULL,\n            ESF_STATE_HASH,\n            CURRENT_TIMESTAMP()\n        FROM VERSION_BOUNDARIES\n        WHERE NOT ESF_IS_DELETE;\n\n        V_ROWS_UPDATED := SQLROWCOUNT;\n{tx_failure}{success}{end}"""
+        return f"""{header}    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_NEW_EVENTS (
+{new_defs},
+        ESF_STREAM_ACTION VARCHAR NOT NULL,
+        ESF_STREAM_ISUPDATE BOOLEAN NOT NULL
+    );
+
+    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_AFFECTED_KEYS (
+{key_defs}
+    );
+
+{running}    BEGIN
+        BEGIN TRANSACTION;
+
+        INSERT INTO ESF_NEW_EVENTS ({_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE)
+        SELECT
+            {_csv(columns)},
+            METADATA$ACTION,
+            METADATA$ISUPDATE
+        FROM {names.stream}
+        WHERE NOT (METADATA$ACTION = 'DELETE' AND METADATA$ISUPDATE);
+
+        V_ROWS_READ := (SELECT COUNT(*) FROM ESF_NEW_EVENTS);
+        V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM ESF_NEW_EVENTS);
+
+        INSERT INTO {names.events_relation} (
+            {_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE, ESF_EVENT_HASH, ESF_CAPTURED_AT
+        )
+        SELECT
+            {_csv(columns, 'N')},
+            N.ESF_STREAM_ACTION,
+            N.ESF_STREAM_ISUPDATE,
+            TO_VARCHAR(HASH({_csv(columns, 'N')}, N.ESF_STREAM_ACTION)),
+            CURRENT_TIMESTAMP()
+        FROM ESF_NEW_EVENTS N
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM {names.events_relation} E
+            WHERE {dedup}
+        );
+
+        V_EVENTS_INSERTED := SQLROWCOUNT;
+        V_EVENTS_INSERT_QUERY_ID := SQLID;
+
+        INSERT INTO ESF_AFFECTED_KEYS ({_csv(business_key)})
+        SELECT DISTINCT {_csv(business_key)}
+        FROM ESF_NEW_EVENTS;
+
+        V_AFFECTED_BUSINESS_KEYS := (SELECT COUNT(*) FROM ESF_AFFECTED_KEYS);
+
+        DELETE FROM {names.history_relation} H
+        USING ESF_AFFECTED_KEYS K
+        WHERE {affected_history};
+
+        V_HISTORY_ROWS_DELETED := SQLROWCOUNT;
+        V_HISTORY_DELETE_QUERY_ID := SQLID;
+
+        INSERT INTO {names.history_relation} (
+            {_csv(columns)}, VALID_FROM, VALID_TO, IS_ACTIVE, ESF_VERSION_HASH, ESF_BUILT_AT
+        )
+        WITH ORDERED_EVENTS AS (
+            SELECT
+                E.*,
+                {state_hash} AS ESF_STATE_HASH,
+                {delete_expr} AS ESF_IS_DELETE,
+                LAG({state_hash}) OVER (
+                    PARTITION BY {_csv(business_key, 'E')}
+                    ORDER BY {order_e}
+                ) AS ESF_PREV_STATE_HASH,
+                LAG({delete_expr}) OVER (
+                    PARTITION BY {_csv(business_key, 'E')}
+                    ORDER BY {order_e}
+                ) AS ESF_PREV_IS_DELETE
+            FROM {names.events_relation} E
+            JOIN ESF_AFFECTED_KEYS K
+              ON {affected_events}
+        ),
+        BOUNDARY_EVENTS AS (
+            SELECT
+                *,
+                IFF(
+                    ESF_IS_DELETE
+                    OR ESF_PREV_STATE_HASH IS NULL
+                    OR COALESCE(ESF_PREV_IS_DELETE, FALSE)
+                    OR ESF_STATE_HASH <> ESF_PREV_STATE_HASH,
+                    TRUE,
+                    FALSE
+                ) AS ESF_IS_BOUNDARY
+            FROM ORDERED_EVENTS
+        ),
+        VERSION_BOUNDARIES AS (
+            SELECT
+                *,
+                LEAD({source_timestamp}) OVER (
+                    PARTITION BY {_csv(business_key)}
+                    ORDER BY {order_plain}
+                ) AS ESF_NEXT_BOUNDARY_AT
+            FROM BOUNDARY_EVENTS
+            WHERE ESF_IS_BOUNDARY
+        )
+        SELECT
+            {_csv(columns)},
+            {source_timestamp},
+            ESF_NEXT_BOUNDARY_AT,
+            ESF_NEXT_BOUNDARY_AT IS NULL,
+            ESF_STATE_HASH,
+            CURRENT_TIMESTAMP()
+        FROM VERSION_BOUNDARIES
+        WHERE NOT ESF_IS_DELETE;
+
+        -- The rebuilt history INSERT is the primary published-Silver DML for the canonical
+        -- metric. Event-ledger and history-delete work stay explicit in pattern metrics.
+        V_HISTORY_ROWS_REBUILT := SQLROWCOUNT;
+        V_HISTORY_REBUILD_QUERY_ID := SQLID;
+        V_ROWS_AFFECTED := V_HISTORY_ROWS_REBUILT;
+        V_DML_QUERY_ID := V_HISTORY_REBUILD_QUERY_ID;
+        V_METRICS := OBJECT_CONSTRUCT(
+            'events_inserted', V_EVENTS_INSERTED,
+            'event_insert_query_id', V_EVENTS_INSERT_QUERY_ID,
+            'history_rows_deleted', V_HISTORY_ROWS_DELETED,
+            'history_delete_query_id', V_HISTORY_DELETE_QUERY_ID,
+            'history_rows_rebuilt', V_HISTORY_ROWS_REBUILT,
+            'history_rebuild_query_id', V_HISTORY_REBUILD_QUERY_ID,
+            'primary_dml_query_id', V_DML_QUERY_ID
+        );
+{tx_failure}{success}{end}"""
 
     raise ValueError(f"unsupported pattern: {pattern}")
