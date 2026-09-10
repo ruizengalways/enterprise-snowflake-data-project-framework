@@ -11,7 +11,7 @@ import yaml
 
 # Keep this release identity explicit and deterministic. A contract test keeps it in sync
 # with pyproject.toml. Generated files must not depend on wall-clock time or Git state.
-FRAMEWORK_VERSION = "0.25.0"
+FRAMEWORK_VERSION = "0.26.0"
 
 VERSION_RE = re.compile(r"^v([1-9][0-9]*)$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -171,11 +171,14 @@ _CUSTOM_ARTIFACTS = (
 
 # Historical revisions must stay here after a new revision is introduced. upgrade-plan
 # verifies a declared digest against this registry; it never reverse-engineers old SQL.
-# Revision 2 of the Stream/Task templates declares version-local Task operational policy.
+# Revision 2 of Stream/Task templates declared version-local Task operational policy.
+# Revision 3 is limited to append/scd2 Stream+Task templates: incoming apply/replay batches now
+# fail closed on conflicting payloads for one idempotency identity and collapse exact duplicates.
 _TEMPLATE_HISTORY: dict[str, dict[int, TemplateSpec]] = {
     "append_stream_task": {
         1: TemplateSpec("append_stream_task", 1, _STREAM_TASK_ARTIFACTS),
         2: TemplateSpec("append_stream_task", 2, _STREAM_TASK_ARTIFACTS),
+        3: TemplateSpec("append_stream_task", 3, _STREAM_TASK_ARTIFACTS),
     },
     "full_refresh_stream_task": {
         1: TemplateSpec("full_refresh_stream_task", 1, _STREAM_TASK_ARTIFACTS),
@@ -197,6 +200,7 @@ _TEMPLATE_HISTORY: dict[str, dict[int, TemplateSpec]] = {
     "scd2_stream_task": {
         1: TemplateSpec("scd2_stream_task", 1, _STREAM_TASK_ARTIFACTS),
         2: TemplateSpec("scd2_stream_task", 2, _STREAM_TASK_ARTIFACTS),
+        3: TemplateSpec("scd2_stream_task", 3, _STREAM_TASK_ARTIFACTS),
     },
     "custom_custom": {1: TemplateSpec("custom_custom", 1, _CUSTOM_ARTIFACTS)},
 }

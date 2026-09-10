@@ -1,29 +1,27 @@
 # Current context
 
-This file describes the **current architecture**, not a chronological PR log. For a new conversation, read `docs/NEXT_CHAT_HANDOFF.md` first, then this file and the architecture document most relevant to the task.
+This file describes the current architecture, not a chronological PR log. For a new conversation, read `docs/NEXT_CHAT_HANDOFF.md` first, then this file and the architecture document most relevant to the task.
 
 ## Current Framework release identity
 
 ```text
 repository = ruizengalways/enterprise-snowflake-data-project-framework
-version    = 0.25.0
+version    = 0.26.0
 ```
 
-Always re-check current `main`, open PRs and CI before modifying code. Green static CI is not Snowflake certification. A revision is Snowflake-certified only when the trusted workflow emits `snowflake-certification.json` with `status = CERTIFIED` for that exact SHA.
+Always re-check current `main`, open PRs and CI before changing code. Green static CI is not Snowflake certification. A revision is Snowflake-certified only when the trusted workflow emits `snowflake-certification.json` with `status = CERTIFIED` for that exact SHA.
 
 ## Framework boundary
 
-This repository is a developer toolkit/bootstrapper for readable Snowflake domain repositories. It generates explicit source code, validates contracts and provides operational/deployment guardrails. It is **not** a universal runtime interpreter.
+This repository is a developer toolkit/bootstrapper for readable Snowflake domain repositories. It generates explicit source code, validates reviewed contracts and provides operational/deployment guardrails. It is **not** a universal runtime interpreter.
 
 Generated implementation and operation units are created once, committed, reviewed and then domain-owned. Framework upgrades never rewrite existing domain implementation SQL in place.
 
 The Framework deliberately does not own source profiling/discovery, one universal ingestion engine, runtime metadata-to-SQL routing, a central SCD engine, business-DQ inference, autonomous production repair, or Bronze-to-Silver execution through dbt.
 
-## Domain and schema boundary
+## Canonical architecture boundary
 
-One business domain normally owns one independent repository and one domain database per environment. A domain may contain many source systems; source boundaries stay explicit in repository paths and Snowflake object names.
-
-Canonical logical vocabulary:
+Logical vocabulary:
 
 ```text
 Bronze
@@ -43,24 +41,11 @@ SEMANTIC
 CONTROL
 ```
 
-`Control` is cross-cutting operational state/evidence, not a medallion transformation layer. Each domain owns writable `CONTROL`; enterprise monitoring consumes read-only exports. See `docs/architecture/NAMING_AND_LAYERS.md`.
+One business domain normally owns one repository and one domain database per environment. A domain may contain many source systems. Source identity remains explicit in paths and object names. Writable `CONTROL` is domain-local; enterprise monitoring consumes stable read-only exports.
 
-## RAW / ingestion / Bronze
+## RAW contract and execution boundary
 
-RAW contracts are reviewed engineering declarations. The Framework never infers business keys, ordering/timestamps, CDC/delete semantics, capture fidelity or SCD pattern from source metadata.
-
-```text
-source evidence / engineering judgement
-  -> esf raw-contract-draft
-  -> engineer review
-  -> esf raw-contract-finalize
-  -> esf add-dataset
-  -> esf plan / scaffold-preview / scaffold
-```
-
-Ingestion remains source-specific. Bronze is retained replay/audit evidence. `CONTROL.INGESTION_RUN` is normalized run evidence, not connector checkpoint ownership.
-
-## Logical pattern vs execution model
+RAW contracts are reviewed engineering declarations. The Framework never infers business keys, ordering/timestamps, CDC/delete semantics, capture fidelity, idempotency identity or SCD pattern.
 
 ```text
 pattern
@@ -85,92 +70,48 @@ scd2         + stream_task   = supported
 custom       + custom        = domain-owned
 ```
 
-Unsupported combinations fail closed. `procedure` is an implementation artifact, not an execution model. See `docs/architecture/EXECUTION_MODELS.md`.
+Unsupported combinations fail closed. `procedure` is an implementation artifact, not an execution model.
 
-## Stream/Task operational policy — 0.23
+## Input idempotency hardening — 0.26
 
-A `stream_task` implementation can explicitly declare version-local Task settings:
+A real Transport-domain adoption exposed a generated-template defect: target-side `NOT EXISTS` protected against identities already persisted, but two rows carrying the same reviewed `idempotency_key` could still arrive in one apply/replay batch and both pass that check.
 
-```text
-warehouse                        -> WAREHOUSE
-minimum_trigger_interval_seconds -> USER_TASK_MINIMUM_TRIGGER_INTERVAL_IN_SECONDS
-timeout_seconds                  -> USER_TASK_TIMEOUT_MS
-suspend_after_failures           -> SUSPEND_TASK_AFTER_NUM_FAILURES
-error_integration                -> ERROR_INTEGRATION
-```
-
-Unspecified optional properties are omitted. Minimum trigger interval is allowed only for generated Stream-triggered `append`, `scd1` and `scd2` implementations. The Framework does not expose arbitrary schedules, generic `AFTER` graphs, generic retry orchestration or a universal readiness DSL. See `docs/architecture/TASK_OPERATIONAL_CONFIG.md`.
-
-## Domain health evaluation cadence — 0.24
-
-Released migration `040_health_task.sql` keeps its historical one-minute schedule and is immutable.
-
-Migration `130_health_evaluation_cadence.sql` adds audit/read surfaces but performs **no `ALTER TASK`**. `esf health-cadence-sql` generates an explicit reviewed operation for a 10..691200 second interval and requires the operator to choose `--resume-after` or `--leave-suspended`.
-
-Generated operations record `STARTED` before Task DDL. Partial failure therefore leaves evidence and is never blindly retried. Actual Task schedule/state is verified from Snowflake metadata; the recorded config view is not authoritative for out-of-band edits. See `docs/architecture/HEALTH_EVALUATION_CADENCE.md`.
-
-## Dynamic Table execution and observability — 0.25
-
-Dynamic Table remains first-class only for compatible declarative patterns. Its version-local execution settings remain:
+Framework 0.26 hardens only `append + stream_task` and `scd2 + stream_task`:
 
 ```text
-target_lag
-warehouse
-refresh_mode = incremental | full
+same identity + conflicting payload -> FAIL CLOSED with E_IDEMPOTENCY_CONFLICT
+same identity + identical payload   -> deterministic batch collapse to one row
+already persisted identity           -> existing target/event-ledger guard remains
 ```
 
-Dynamic Table implementations intentionally have no fake Stream, Task, apply or replay procedure artifacts. `TARGET_LAG` is execution policy, not logical SLA.
+Append identity is the RAW `idempotency_key`. SCD2 event identity remains RAW `idempotency_key + ESF_STREAM_ACTION`; delete/insert evidence is not redefined.
 
-Released migration `100_dynamic_table_observability.sql` established the native evidence path and remains immutable. Migration `140_dynamic_table_observability_enrichment.sql` enriches the same views using current Snowflake Information Schema metadata:
+Apply and replay use the same rule. Full replay checks conflicts before destructive candidate clearing. The Framework does not silently choose a winning conflicting payload and does not become a source checkpoint or universal deduplication engine. See `docs/architecture/INPUT_IDEMPOTENCY.md`.
+
+Template provenance advances only for affected generated contracts:
 
 ```text
-DYNAMIC_TABLE_REFRESH_HISTORY
-  -> refresh action / trigger / reinit reason
-  -> state / code / message / query id
-  -> data timestamp / refresh timing / completion target
-  -> native STATISTICS + inputs with changed data
-
-DYNAMIC_TABLES
-  -> scheduling state / reason
-  -> target / mean / maximum lag
-  -> time above target + within-target ratio
-  -> latest data timestamp
-  -> last completed state
-  -> executing refresh query id
+append_stream_task  revision 2 -> 3
+scd2_stream_task    revision 2 -> 3
 ```
 
-Detailed native payloads stay in `CONTROL.DYNAMIC_TABLE_REFRESH_STATUS_V`. `CONTROL.DATASET_OBSERVABILITY_V` remains the one cross-execution-model surface and exposes only compact Dynamic Table triage fields.
+SCD1, full-refresh, Dynamic Table and custom template revisions remain unchanged. `esf upgrade-plan` is read-only and reports older registered revisions as `UPDATE_AVAILABLE`; it never rewrites domain-owned code.
 
-A currently executing refresh takes precedence over the previous completed refresh when deriving `SILVER_STATUS = RUNNING`. The Framework does not map Dynamic Table refresh statistics into the explicit-pipeline `ROWS_AFFECTED` contract because their semantics differ.
+## Earlier stable contracts
 
-The core operational path remains database-local Information Schema. Account Usage can serve separate long-retention reporting when required, but is not substituted into low-latency domain health merely for longer history. See `docs/architecture/DYNAMIC_TABLE_OBSERVABILITY.md`.
+Framework 0.20 established canonical explicit-pipeline metrics: `ROWS_AFFECTED = SQLROWCOUNT` for the primary Silver DML and `DML_QUERY_ID = SQLID` captured immediately after that DML.
 
-## Canonical explicit-pipeline run metrics — 0.20
+Framework 0.21 added guarded release readiness and release audit. `BLOCKED` has no bypass; `REVIEW_REQUIRED` requires explicit operator acceptance and reason. `CANDIDATE_VERSION` remains a single-candidate convenience/lock rather than a speculative lifecycle state machine.
 
-Migration `110_pipeline_execution_metrics.sql` established:
+Framework 0.22 added deterministic template provenance and read-only `esf upgrade-plan` statuses: `CURRENT`, `UPDATE_AVAILABLE`, `ADVISORY`, `UNKNOWN`, `UNVERIFIED`.
 
-```text
-ROWS_AFFECTED = SQLROWCOUNT for the primary Silver DML
-DML_QUERY_ID  = SQLID captured immediately after that same DML
-```
+Framework 0.23 added narrow version-local Stream/Task operational policy: warehouse, minimum trigger interval, timeout, suspend-after-failures and optional error integration. It does not expose arbitrary schedules, generic task graphs or universal orchestration metadata.
 
-Pattern-specific physical work belongs in `METRICS`; historical inserted/updated/deleted columns are compatibility evidence only. See `docs/architecture/RUN_EVIDENCE.md`.
+Framework 0.24 added explicit audited domain health-evaluator cadence operations through migration `130_health_evaluation_cadence.sql` without editing released migration 040 or silently retuning a live Task.
 
-## Release readiness — 0.21
-
-Migration `120_release_readiness.sql` plus generated release bundles enforce active/candidate invariants, runtime/DQ/comparison freshness, hard preflight/postflight, `CONTROL.RELEASE_RUN` audit, grant-preserving cutover and guarded rollback.
-
-`BLOCKED` has no bypass. `REVIEW_REQUIRED` requires explicit acceptance and reason. `CANDIDATE_VERSION` remains the current single-candidate convenience/lock; do not invent a speculative lifecycle state machine.
-
-## Template provenance — 0.22
-
-New implementation versions declare deterministic `framework_version`, `template_id`, `template_revision`, and `template_digest`. `esf upgrade-plan` is read-only. Pre-provenance versions are `UNKNOWN`; digest mismatch is `UNVERIFIED`; historical template revision is never guessed from SQL.
-
-0.25 changes only project-level Control migration content. Dataset scaffold artifact contracts did not change, so template revisions do **not** advance for 0.25. See `docs/architecture/TEMPLATE_PROVENANCE.md`.
+Framework 0.25 added migration `140_dynamic_table_observability_enrichment.sql`, enriching the existing Snowflake-native Dynamic Table observability path while keeping `CONTROL.DATASET_OBSERVABILITY_V` as the one unified evidence surface. It does not fabricate Dynamic Table `PIPELINE_RUN` rows.
 
 ## Unified observability boundary
-
-Unify evidence contracts, not runtime mechanics:
 
 ```text
 explicit Stream/Task or batch apply
@@ -187,11 +128,11 @@ both
   -> health / SLA / incidents
 ```
 
-Do not create fake Dynamic Table `PIPELINE_RUN` rows or another competing unified execution-health abstraction.
+Unify evidence contracts, not runtime mechanics. Do not add a second competing execution-health abstraction without a concrete missing contract.
 
 ## Control Plane migrations
 
-Fresh 0.25 projects include:
+Framework 0.26 adds **no Control migration**. Fresh projects still contain the released chain through 140:
 
 ```text
 001_objects.sql
@@ -211,7 +152,7 @@ Fresh 0.25 projects include:
 140_dynamic_table_observability_enrichment.sql
 ```
 
-Released numbered migrations are immutable. Never edit 001..140 in place after release; append a later migration.
+Released numbered migrations are immutable. Never edit 001..140 in place after release; append a later migration only when a Control contract actually changes.
 
 Rerunning `esf init-project` materializes missing Framework files but never rewrites an existing domain-owned `control_plane/deploy_manifest.txt`. Engineers review `esf control-plan` and explicitly append adopted migrations without reordering recorded history.
 
@@ -232,23 +173,14 @@ Dataset-local structural validation writes `CONTROL.DQ_RESULT`; domain-authored 
 
 SLA remains logical-dataset policy. Do not infer SLA thresholds from Dynamic Table target lag, version Task configuration, or domain health evaluator cadence.
 
-## Enterprise monitoring
-
-Each domain owns writable Control state and exposes stable read-only health exports:
-
-```text
-CONTROL.ENTERPRISE_HEALTH_EXPORT_V
-CONTROL.DOMAIN_HEALTH_SUMMARY_V
-```
-
-Cross-domain monitoring is read-only aggregation. It does not write back into domain Control.
-
 ## dbt / Gold / Semantic
 
-dbt begins at trusted Silver and owns downstream Gold/Mart/Semantic transformation. It never becomes the Bronze-to-Silver execution engine.
+dbt begins at trusted Silver and owns downstream Gold/Mart/Semantic transformation. It never becomes the Bronze-to-Silver execution engine in the current Framework architecture.
 
-## Roadmap state after 0.25
+## Current evidence-driven priority
 
-The planned architecture prompts through Dynamic Table observability enrichment are complete. Do **not** add speculative framework abstractions simply to continue the roadmap.
+The planned architecture roadmap through 0.25 is complete. Framework 0.26 exists because real Transport adoption found a concrete template correctness defect.
 
-Next changes should be evidence-driven: real Snowflake certification/integration findings, a concrete domain adoption defect, or an operational requirement that cannot fit the existing contracts. Prefer fixing the narrow missing contract over adding a second framework layer.
+After 0.26 is merged and static CI is green, return to `enterprise-snowflake-transport-analytics`: regenerate its unmerged shadow Silver v1 implementations from the exact 0.26 SHA, verify revision-3 provenance and idempotency guards, compare against the existing legacy dbt Silver outputs, and only then consider Control/deployment adoption.
+
+Do not add another Framework abstraction merely to continue a roadmap. Prefer live Snowflake certification/integration evidence and concrete domain-adoption defects as the trigger for future changes.
