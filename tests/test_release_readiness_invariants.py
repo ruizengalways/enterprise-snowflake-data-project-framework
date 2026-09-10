@@ -107,7 +107,8 @@ class ReleaseReadinessInvariantTests(unittest.TestCase):
         self.assertNotIn("ALTER DYNAMIC TABLE", sql)
 
         manifest = (self.root / "control_plane" / "deploy_manifest.txt").read_text(encoding="utf-8")
-        self.assertTrue(manifest.rstrip().endswith("control_plane/sql/120_release_readiness.sql"))
+        self.assertIn("control_plane/sql/120_release_readiness.sql", manifest)
+        self.assertTrue(manifest.rstrip().endswith("control_plane/sql/130_health_evaluation_cadence.sql"))
         self.assertTrue(build_control_plan(self.root).ready)
 
     def test_candidate_registration_blocks_second_candidate_before_pointer_update(self) -> None:
