@@ -45,13 +45,28 @@ CALL CONTROL.RECORD_RECONCILIATION_RESULT(
 
 Use `VERSION = NULL` when the evidence belongs to a non-versioned boundary such as Source -> Bronze. Use the concrete implementation version when the reconciliation is about a versioned Silver implementation.
 
+For the same stage, active-version evidence takes precedence over versionless evidence. Recency is considered within that precedence. This prevents a newer generic/unversioned check from masking the current Silver implementation's reconciliation result.
+
+## Fail-closed normalization
+
+The record API intentionally accepts a very small operational vocabulary:
+
+```text
+severity: ERROR | WARN
+status:   PASS | FAIL
+```
+
+Unknown severity is normalized to `ERROR`. Unknown status is stored as `INVALID`. Any status other than `PASS` participates as a failure, so malformed producer values cannot silently become healthy evidence.
+
 ## Health behavior
 
-The domain health contract considers the latest relevant reconciliation per stage. An active-version/error-severity failure contributes `RECONCILIATION_STATUS = FAILED`, turns the dataset health red, and the quality-incident evaluator maintains one open `RECONCILIATION_FAILURE` incident per dataset/stage until a newer successful result recovers it.
+The domain health contract considers the latest relevant reconciliation per stage. An active-version/error-severity failure contributes `RECONCILIATION_STATUS = FAILED`, turns the dataset health red, and the quality-incident evaluator maintains one open `RECONCILIATION_FAILURE` incident per dataset/stage until newer successful evidence recovers it.
 
 `WARN` failures contribute a yellow warning but do not open an automatic failure incident.
 
 Candidate-version evidence is retained for release review but does not make the currently active production dataset unhealthy.
+
+The serverless quality-incident task is created suspended. Resume it explicitly after migration review. Migration 080 does not replace the existing domain-health task.
 
 ## Repair
 
