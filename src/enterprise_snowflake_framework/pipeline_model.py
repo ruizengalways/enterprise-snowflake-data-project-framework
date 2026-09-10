@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .execution_model import default_execution_model, validate_execution_model
+
 
 @dataclass(frozen=True)
 class PipelineNames:
@@ -12,6 +14,7 @@ class PipelineNames:
     object_base: str
     entity: str
     version: str
+    execution_model: str
     bronze_relation: str
     stream: str | None
     physical_relation: str | None
@@ -21,17 +24,33 @@ class PipelineNames:
     published_relation: str | None
     published_history: str | None
     published_current: str | None
-    apply_procedure: str
-    replay_procedure: str
-    validate_procedure: str
-    task: str
+    dynamic_table: str | None
+    apply_procedure: str | None
+    replay_procedure: str | None
+    validate_procedure: str | None
+    task: str | None
 
 
-def build_names(*, source_id: str, dataset_id: str, pattern: str, entity: str, version: str) -> PipelineNames:
+def build_names(
+    *,
+    source_id: str,
+    dataset_id: str,
+    pattern: str,
+    entity: str,
+    version: str,
+    execution_model: str | None = None,
+) -> PipelineNames:
+    execution_model = execution_model or default_execution_model(pattern)
+    validate_execution_model(pattern, execution_model)
     base = f"{source_id}_{dataset_id}".upper()
     entity_u = entity.upper()
     version_u = version.upper()
-    stream = None if pattern in {"full_refresh", "custom"} else f"BRONZE.{base}_{version_u}_STREAM"
+
+    uses_stream = execution_model == "stream_task" and pattern not in {"full_refresh", "custom"}
+    uses_task = execution_model == "stream_task" and pattern != "custom"
+    uses_procedures = execution_model in {"stream_task", "batch_sql"} and pattern != "custom"
+    stream = f"BRONZE.{base}_{version_u}_STREAM" if uses_stream else None
+
     physical = None
     events = None
     history = None
@@ -48,6 +67,8 @@ def build_names(*, source_id: str, dataset_id: str, pattern: str, entity: str, v
     elif pattern != "custom":
         physical = f"SILVER.{base}_{version_u}"
         published_relation = f"SILVER.{base}"
+
+    dynamic_table = physical if execution_model == "dynamic_table" else None
     return PipelineNames(
         source_id=source_id,
         dataset_id=dataset_id,
@@ -55,6 +76,7 @@ def build_names(*, source_id: str, dataset_id: str, pattern: str, entity: str, v
         object_base=base,
         entity=entity_u,
         version=version,
+        execution_model=execution_model,
         bronze_relation=f"BRONZE.{base}",
         stream=stream,
         physical_relation=physical,
@@ -64,10 +86,11 @@ def build_names(*, source_id: str, dataset_id: str, pattern: str, entity: str, v
         published_relation=published_relation,
         published_history=published_history,
         published_current=published_current,
-        apply_procedure=f"SILVER.APPLY_{base}_{version_u}",
-        replay_procedure=f"SILVER.REPLAY_{base}_{version_u}",
-        validate_procedure=f"SILVER.VALIDATE_{base}_{version_u}",
-        task=f"SILVER.{base}_{version_u}_TASK",
+        dynamic_table=dynamic_table,
+        apply_procedure=f"SILVER.APPLY_{base}_{version_u}" if uses_procedures else None,
+        replay_procedure=f"SILVER.REPLAY_{base}_{version_u}" if uses_procedures else None,
+        validate_procedure=f"SILVER.VALIDATE_{base}_{version_u}" if uses_procedures else None,
+        task=f"SILVER.{base}_{version_u}_TASK" if uses_task else None,
     )
 
 
