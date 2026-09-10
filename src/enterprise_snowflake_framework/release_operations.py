@@ -280,6 +280,7 @@ def _render_rollback_script(
     return f"""-- Explicit rollback: {active.dataset_key} {active.version} ({active.execution_model}) -> {target.version} ({target.execution_model})
 -- Requires CONTROL migration 120_release_readiness.sql.
 -- Rollback is fail-closed if another candidate has been registered since the cutover.
+-- The retired target must be caught up and revalidated before this script is run.
 EXECUTE IMMEDIATE $$
 DECLARE
     V_RELEASE_ID VARCHAR DEFAULT UUID_STRING();
@@ -288,6 +289,13 @@ DECLARE
     V_CURRENT_CANDIDATE VARCHAR;
     V_ACTIVE_STATUS_COUNT NUMBER DEFAULT 0;
     V_TARGET_STATUS VARCHAR;
+    V_ACTIVE_RUNTIME_EVIDENCE_AT TIMESTAMP_LTZ;
+    V_ACTIVE_DATA_MAX_AT TIMESTAMP_LTZ;
+    V_TARGET_RUNTIME_STATUS VARCHAR;
+    V_TARGET_RUNTIME_EVIDENCE_AT TIMESTAMP_LTZ;
+    V_TARGET_DATA_MAX_AT TIMESTAMP_LTZ;
+    V_TARGET_DQ_STATUS VARCHAR;
+    V_TARGET_DQ_CHECKED_AT TIMESTAMP_LTZ;
     V_TARGET_ACTIVE_COUNT NUMBER DEFAULT 0;
     V_OLD_RETIRED_COUNT NUMBER DEFAULT 0;
     V_PUBLISHED_MATCH_COUNT NUMBER DEFAULT 0;
@@ -321,17 +329,73 @@ BEGIN
         WHERE DATASET_ID = '{active.dataset_key}'
           AND VERSION = '{target.version}'
     );
+    V_ACTIVE_RUNTIME_EVIDENCE_AT := (
+        SELECT MAX(RUNTIME_EVIDENCE_AT)
+        FROM CONTROL.VERSION_RUNTIME_STATUS_V
+        WHERE DATASET_ID = '{active.dataset_key}'
+          AND VERSION = '{active.version}'
+    );
+    V_ACTIVE_DATA_MAX_AT := (
+        SELECT MAX(DATA_MAX_AT)
+        FROM CONTROL.VERSION_RUNTIME_STATUS_V
+        WHERE DATASET_ID = '{active.dataset_key}'
+          AND VERSION = '{active.version}'
+    );
+    V_TARGET_RUNTIME_STATUS := (
+        SELECT MAX(RUNTIME_STATUS)
+        FROM CONTROL.VERSION_RUNTIME_STATUS_V
+        WHERE DATASET_ID = '{active.dataset_key}'
+          AND VERSION = '{target.version}'
+    );
+    V_TARGET_RUNTIME_EVIDENCE_AT := (
+        SELECT MAX(RUNTIME_EVIDENCE_AT)
+        FROM CONTROL.VERSION_RUNTIME_STATUS_V
+        WHERE DATASET_ID = '{active.dataset_key}'
+          AND VERSION = '{target.version}'
+    );
+    V_TARGET_DATA_MAX_AT := (
+        SELECT MAX(DATA_MAX_AT)
+        FROM CONTROL.VERSION_RUNTIME_STATUS_V
+        WHERE DATASET_ID = '{active.dataset_key}'
+          AND VERSION = '{target.version}'
+    );
+    V_TARGET_DQ_STATUS := (
+        SELECT MAX(DQ_STATUS)
+        FROM CONTROL.DQ_LATEST_RUN_V
+        WHERE DATASET_ID = '{active.dataset_key}'
+          AND VERSION = '{target.version}'
+    );
+    V_TARGET_DQ_CHECKED_AT := (
+        SELECT MAX(CHECKED_AT)
+        FROM CONTROL.DQ_LATEST_RUN_V
+        WHERE DATASET_ID = '{active.dataset_key}'
+          AND VERSION = '{target.version}'
+    );
 
     IF (
         V_CURRENT_ACTIVE <> '{active.version}'
         OR V_CURRENT_CANDIDATE IS NOT NULL
         OR V_ACTIVE_STATUS_COUNT <> 1
         OR UPPER(COALESCE(V_TARGET_STATUS, '')) <> 'RETIRED'
+        OR V_ACTIVE_RUNTIME_EVIDENCE_AT IS NULL
+        OR UPPER(COALESCE(V_TARGET_RUNTIME_STATUS, '')) <> 'SUCCESS'
+        OR V_TARGET_RUNTIME_EVIDENCE_AT IS NULL
+        OR UPPER(COALESCE(V_TARGET_DQ_STATUS, '')) <> 'PASS'
+        OR V_TARGET_DQ_CHECKED_AT IS NULL
+        OR V_TARGET_DQ_CHECKED_AT < V_TARGET_RUNTIME_EVIDENCE_AT
+        OR (
+            V_ACTIVE_DATA_MAX_AT IS NOT NULL
+            AND (V_TARGET_DATA_MAX_AT IS NULL OR V_TARGET_DATA_MAX_AT < V_ACTIVE_DATA_MAX_AT)
+        )
+        OR (
+            V_ACTIVE_DATA_MAX_AT IS NULL
+            AND V_TARGET_RUNTIME_EVIDENCE_AT < V_ACTIVE_RUNTIME_EVIDENCE_AT
+        )
     ) THEN
         UPDATE CONTROL.RELEASE_RUN
         SET PREFLIGHT_AT = CURRENT_TIMESTAMP(),
             PREFLIGHT_STATUS = 'BLOCKED',
-            PREFLIGHT_REASON = 'rollback requires expected active version, no new candidate, one ACTIVE row and RETIRED target'
+            PREFLIGHT_REASON = 'rollback requires expected pointers/statuses plus caught-up SUCCESS target runtime and fresh PASS target DQ'
         WHERE RELEASE_ID = :V_RELEASE_ID;
         RAISE E_ROLLBACK_BLOCKED;
     END IF;
@@ -339,7 +403,7 @@ BEGIN
     UPDATE CONTROL.RELEASE_RUN
     SET PREFLIGHT_AT = CURRENT_TIMESTAMP(),
         PREFLIGHT_STATUS = 'READY',
-        PREFLIGHT_REASON = 'rollback target is the retired prior implementation and no new candidate is registered'
+        PREFLIGHT_REASON = 'rollback target is retired, caught up, runtime SUCCESS and DQ PASS after target runtime evidence'
     WHERE RELEASE_ID = :V_RELEASE_ID;
 
     V_PHASE := 'CUTOVER';
