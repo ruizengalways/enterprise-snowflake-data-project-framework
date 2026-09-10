@@ -137,9 +137,12 @@ class VersionedPipelineOperationTests(unittest.TestCase):
         self.assertIn("FLEET_MSSQL_CUSTOMER_V1_HISTORY", objects)
         self.assertIn("FLEET_MSSQL_CUSTOMER_V1_CURRENT", objects)
         self.assertIn("IS_ACTIVE = TRUE", objects)
-        self.assertIn("CREATE OR REPLACE PROCEDURE SILVER.APPLY_FLEET_MSSQL_CUSTOMER_V1", apply_sql)
+        self.assertIn("CREATE PROCEDURE SILVER.APPLY_FLEET_MSSQL_CUSTOMER_V1", apply_sql)
+        self.assertNotIn("CREATE OR REPLACE PROCEDURE SILVER.APPLY_", apply_sql)
         self.assertIn("SYSTEM$STREAM_HAS_DATA", task_sql)
         self.assertIn("WH_TRANSPORT_TRANSFORM", task_sql)
+        self.assertIn("CREATE TASK SILVER.FLEET_MSSQL_CUSTOMER_V1_TASK", task_sql)
+        self.assertNotIn("CREATE OR REPLACE TASK", task_sql)
         self.assertIn("SILVER.FLEET_MSSQL_CUSTOMER_CURRENT", publish)
         self.assertIn("CONTROL.DATASET_VERSION", register)
         self.assertIn("initial implementation has no prior active version", compare)
@@ -204,9 +207,15 @@ class VersionedPipelineOperationTests(unittest.TestCase):
         activate = (result.destination / "activate.sql").read_text(encoding="utf-8")
         rollback = (result.destination / "rollback.sql").read_text(encoding="utf-8")
         self.assertIn("ALTER TASK SILVER.FLEET_MSSQL_CUSTOMER_V1_TASK SUSPEND", activate)
+        self.assertIn("COPY GRANTS", activate)
         self.assertIn("FROM SILVER.FLEET_MSSQL_CUSTOMER_V2_HISTORY", activate)
         self.assertIn("ACTIVE_VERSION = 'v2'", activate)
+        self.assertIn("COPY GRANTS", rollback)
         self.assertIn("FROM SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY", rollback)
+        self.assertLess(
+            activate.index("CREATE OR REPLACE VIEW SILVER.FLEET_MSSQL_CUSTOMER_HISTORY COPY GRANTS"),
+            activate.index("ALTER TASK SILVER.FLEET_MSSQL_CUSTOMER_V1_TASK SUSPEND"),
+        )
         marker = result.destination / "activate.sql"
         marker.write_text("-- REVIEWED CUSTOM RELEASE\n", encoding="utf-8")
         repeated = generate_release_scripts(
