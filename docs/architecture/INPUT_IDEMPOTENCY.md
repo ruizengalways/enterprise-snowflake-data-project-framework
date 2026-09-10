@@ -46,6 +46,22 @@ A conflict raises `E_IDEMPOTENCY_CONFLICT` from generated Snowflake Scripting. T
 
 Exact duplicates may be collapsed because conflict detection has already established that all rows for the identity agree on the payload used by the generated implementation.
 
+### NULL-safe identity comparison
+
+RAW contract v2 does not require every `idempotency_key` component to be `nullable=false`. Framework 0.26 therefore does **not** retroactively invalidate an otherwise reviewed v2 contract merely because an idempotency component is nullable.
+
+Generated target/event-ledger comparisons use `IS NOT DISTINCT FROM` for identity components. Two NULL values therefore compare as the same identity instead of bypassing the persisted-row guard through ordinary SQL `NULL = NULL` semantics.
+
+### Conflict payload signature
+
+Conflict detection compares a canonical JSON representation of the generated payload:
+
+```text
+TO_JSON(ARRAY_CONSTRUCT_KEEP_NULL(...payload columns...))
+```
+
+This preserves NULL positions and avoids making correctness depend on a finite hash collision domain. Hashes may still be used elsewhere for existing event/state evidence, but not as the authority for deciding whether two same-identity incoming payloads conflict.
+
 ## Replay ordering
 
 For append and SCD2 full replay, conflicting input is checked **before destructive candidate clearing**.
@@ -85,7 +101,7 @@ Other template revisions do not advance.
 
 `esf upgrade-plan --project-root .` reports earlier registered revisions as `UPDATE_AVAILABLE`; it remains read-only and never rewrites domain-owned SQL.
 
-Existing domain versions stay valid source code owned by their domain. To adopt the hardened template, create/re-scaffold an ownership unit only where domain ownership rules permit it, review the generated SQL, and compare behavior before release.
+Existing domain versions stay valid source code owned by their domain. A merged/owned version is never regenerated in place. To adopt the hardened template, create a new reviewed version; an unmerged shadow scaffold may instead be discarded and regenerated before it becomes domain-owned history.
 
 ## Control Plane impact
 
