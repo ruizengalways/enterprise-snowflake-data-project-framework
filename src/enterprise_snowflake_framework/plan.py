@@ -5,7 +5,6 @@ from pathlib import Path
 
 import yaml
 
-from .execution_model import default_execution_model
 from .source_management import load_source_manifest
 
 STREAM_TASK_FILES = (
@@ -36,7 +35,17 @@ DYNAMIC_TABLE_FILES = (
     "deploy_manifest.fragment.txt",
 )
 BATCH_SQL_FILES = tuple(name for name in STREAM_TASK_FILES if name != "030_task.sql")
-CUSTOM_FILES = STREAM_TASK_FILES
+CUSTOM_FILES = (
+    "README.md",
+    "pipeline.yml",
+    "version.yml",
+    "001_objects.sql",
+    "025_compare.sql",
+    "040_register.sql",
+    "050_publish.sql",
+    "060_policy.sql",
+    "deploy_manifest.fragment.txt",
+)
 # Backward-compatible public constant for pre-execution-model callers/tests.
 STANDARD_DATASET_FILES = STREAM_TASK_FILES
 
@@ -47,7 +56,6 @@ def standard_dataset_files(destination: Path) -> tuple[str, ...]:
     if version_file.is_file():
         try:
             document = yaml.safe_load(version_file.read_text(encoding="utf-8"))
-            pattern = "custom" if not isinstance(document, dict) else None
             version = document.get("version", {}) if isinstance(document, dict) else {}
             execution_model = str(version.get("execution_model") or "stream_task")
         except (OSError, yaml.YAMLError):
