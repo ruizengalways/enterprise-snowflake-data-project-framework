@@ -28,6 +28,27 @@ def _transaction_failure_block() -> str:
     return """        COMMIT;\n    EXCEPTION\n        WHEN OTHER THEN\n            ROLLBACK;\n            UPDATE CONTROL.PIPELINE_RUN\n            SET STATUS = 'FAILED',\n                COMPLETED_AT = CURRENT_TIMESTAMP(),\n                ERROR_CODE = TO_VARCHAR(SQLCODE),\n                ERROR_MESSAGE = SQLERRM\n            WHERE RUN_ID = :V_RUN_ID;\n            RAISE;\n    END;\n\n"""
 
 
+def _strictly_newer_expression(incoming: str, existing: str, ordering: list[str]) -> str:
+    """Render a lexicographic ordering comparison for SCD1 current-state protection.
+
+    The first ordering column has highest precedence. Equal ordering tuples are treated as
+    duplicates/no-ops. If a contract provides no ordering evidence, preserve the historical
+    behavior rather than pretending the Framework can infer recency.
+    """
+    if not ordering:
+        return "TRUE"
+    clauses: list[str] = []
+    equal_prefix: list[str] = []
+    for column in ordering:
+        comparison = f"{incoming}.{column} > {existing}.{column}"
+        if equal_prefix:
+            clauses.append("(" + " AND ".join([*equal_prefix, comparison]) + ")")
+        else:
+            clauses.append(f"({comparison})")
+        equal_prefix.append(f"{incoming}.{column} = {existing}.{column}")
+    return "(" + " OR ".join(clauses) + ")"
+
+
 def freshness_column(contract: dict[str, Any]) -> str | None:
     if contract.get("source_timestamp"):
         return str(contract["source_timestamp"]).upper()
@@ -72,9 +93,10 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
         order_desc = ", ".join(f"{name} DESC" for name in ordering) or ", ".join(f"{name} DESC" for name in business_key)
         delete_expr = _delete_expression(contract, "N")
         join = _join("T", "N", business_key)
+        newer = _strictly_newer_expression("N", "T", ordering)
         updates = [name for name in columns if name not in business_key]
         update_set = ",\n            ".join(f"T.{name} = N.{name}" for name in updates)
-        return f"""{header}    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_NEW_EVENTS (\n{new_defs},\n        ESF_STREAM_ACTION VARCHAR NOT NULL,\n        ESF_STREAM_ISUPDATE BOOLEAN NOT NULL\n    );\n\n{running}    BEGIN\n        BEGIN TRANSACTION;\n\n        INSERT INTO ESF_NEW_EVENTS ({_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE)\n        SELECT\n            {_csv(columns)},\n            METADATA$ACTION,\n            METADATA$ISUPDATE\n        FROM {names.stream}\n        WHERE NOT (METADATA$ACTION = 'DELETE' AND METADATA$ISUPDATE);\n\n        V_ROWS_READ := (SELECT COUNT(*) FROM ESF_NEW_EVENTS);\n        V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM ESF_NEW_EVENTS);\n\n        MERGE INTO {names.physical_relation} T\n        USING (\n            SELECT *\n            FROM ESF_NEW_EVENTS\n            QUALIFY ROW_NUMBER() OVER (\n                PARTITION BY {_csv(business_key)}\n                ORDER BY {order_desc}\n            ) = 1\n        ) N\n        ON {join}\n        WHEN MATCHED AND {delete_expr} THEN DELETE\n        WHEN MATCHED THEN UPDATE SET\n            {update_set},\n            T.ESF_LOADED_AT = CURRENT_TIMESTAMP()\n        WHEN NOT MATCHED AND NOT {delete_expr} THEN INSERT (\n            {_csv(columns)}, ESF_LOADED_AT\n        ) VALUES (\n            {_csv(columns, 'N')}, CURRENT_TIMESTAMP()\n        );\n\n        V_ROWS_UPDATED := SQLROWCOUNT;\n{tx_failure}{success}{end}"""
+        return f"""{header}    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_NEW_EVENTS (\n{new_defs},\n        ESF_STREAM_ACTION VARCHAR NOT NULL,\n        ESF_STREAM_ISUPDATE BOOLEAN NOT NULL\n    );\n\n{running}    BEGIN\n        BEGIN TRANSACTION;\n\n        INSERT INTO ESF_NEW_EVENTS ({_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE)\n        SELECT\n            {_csv(columns)},\n            METADATA$ACTION,\n            METADATA$ISUPDATE\n        FROM {names.stream}\n        WHERE NOT (METADATA$ACTION = 'DELETE' AND METADATA$ISUPDATE);\n\n        V_ROWS_READ := (SELECT COUNT(*) FROM ESF_NEW_EVENTS);\n        V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM ESF_NEW_EVENTS);\n\n        MERGE INTO {names.physical_relation} T\n        USING (\n            SELECT *\n            FROM ESF_NEW_EVENTS\n            QUALIFY ROW_NUMBER() OVER (\n                PARTITION BY {_csv(business_key)}\n                ORDER BY {order_desc}\n            ) = 1\n        ) N\n        ON {join}\n        -- SCD1 is current-state semantics: a late or out-of-order event must not regress an\n        -- already newer target row. Equal ordering tuples are duplicate/no-op evidence.\n        WHEN MATCHED AND {newer} AND {delete_expr} THEN DELETE\n        WHEN MATCHED AND {newer} THEN UPDATE SET\n            {update_set},\n            T.ESF_LOADED_AT = CURRENT_TIMESTAMP()\n        WHEN NOT MATCHED AND NOT {delete_expr} THEN INSERT (\n            {_csv(columns)}, ESF_LOADED_AT\n        ) VALUES (\n            {_csv(columns, 'N')}, CURRENT_TIMESTAMP()\n        );\n\n        V_ROWS_UPDATED := SQLROWCOUNT;\n{tx_failure}{success}{end}"""
 
     if pattern == "scd2":
         assert names.stream and names.events_relation and names.history_relation

@@ -75,4 +75,5 @@ jobs:
           grep -Fq 'CONTROL.BEGIN_INGESTION_RUN' src/enterprise_snowflake_framework/templates/project/control_plane_060_run_evidence_api.sql
           grep -Fq 'esf-migrate deploy' .github/workflows/project-deploy.yml
 
-# Live Snowflake/WIF acceptance remains a separate environment gate.
+# This workflow is intentionally credential-free for pull requests. Real Snowflake execution is
+# isolated in .github/workflows/snowflake-certification.yml and only uses a trusted main revision.

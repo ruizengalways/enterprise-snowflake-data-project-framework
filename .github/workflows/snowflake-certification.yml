@@ -1,0 +1,155 @@
+name: Snowflake Framework Certification
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Silver-first Toolkit CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: snowflake-framework-certification
+  cancel-in-progress: false
+
+jobs:
+  certify:
+    # Never run privileged Snowflake certification for a pull_request workflow run.
+    # Automatic execution is opt-in and only follows a successful push CI for main.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.conclusion == 'success' &&
+       vars.ESF_SNOWFLAKE_CERTIFICATION_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    environment: snowflake-certification
+    env:
+      SNOWFLAKE_USER: SU_GITHUB_FRAMEWORK_CERT
+      SNOWFLAKE_ROLE: AR_FRAMEWORK_CERT
+      SNOWFLAKE_WAREHOUSE: WH_FRAMEWORK_CERT_TRANSFORM
+      SNOWFLAKE_DATABASE: CI_FRAMEWORK_CERT
+      ESF_SNOWFLAKE_AUTHENTICATOR: WORKLOAD_IDENTITY
+      ESF_SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+      SNOWFLAKE_ENHANCED_EXIT_CODES: "1"
+
+    steps:
+      - name: Resolve trusted framework revision
+        id: trusted
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
+            sha="${{ github.event.workflow_run.head_sha }}"
+          else
+            sha="${GITHUB_SHA}"
+          fi
+          if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Certification requires an immutable 40-character framework SHA." >&2
+            exit 1
+          fi
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout trusted framework
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ steps.trusted.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify trusted checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="${{ steps.trusted.outputs.sha }}"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "Certification checkout does not match trusted framework SHA." >&2
+            exit 1
+          fi
+          echo "ESF_FRAMEWORK_GIT_SHA=${actual}" >> "${GITHUB_ENV}"
+
+      - name: Setup Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install certified framework revision
+        run: python -m pip install .
+
+      - name: Load approved Snowflake certification configuration
+        shell: bash
+        env:
+          ESF_SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+          ESF_SNOWFLAKE_OIDC_AUDIENCE: ${{ vars.SNOWFLAKE_OIDC_AUDIENCE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ESF_SNOWFLAKE_ACCOUNT:-}" || -z "${ESF_SNOWFLAKE_OIDC_AUDIENCE:-}" ]]; then
+            echo "GitHub Environment snowflake-certification must define SNOWFLAKE_ACCOUNT and SNOWFLAKE_OIDC_AUDIENCE." >&2
+            exit 1
+          fi
+          if [[ "${ESF_SNOWFLAKE_OIDC_AUDIENCE}" == "snowflakecomputing.com" ]]; then
+            echo "Use an account-scoped Snowflake OIDC audience for certification." >&2
+            exit 1
+          fi
+          echo "SNOWFLAKE_ACCOUNT=${ESF_SNOWFLAKE_ACCOUNT}" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_OIDC_AUDIENCE=${ESF_SNOWFLAKE_OIDC_AUDIENCE}" >> "${GITHUB_ENV}"
+
+      - name: Install Snowflake CLI
+        uses: snowflakedb/snowflake-actions@1160898243c351349621a6c2bac2e455ab1077b2
+        with:
+          use-oidc: false
+          cli-version: "3.25.0"
+
+      - name: Request account-scoped GitHub OIDC token
+        id: oidc
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(curl --fail --silent --show-error \
+            --get \
+            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            --data-urlencode "audience=${SNOWFLAKE_OIDC_AUDIENCE}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}")"
+          token="$(jq -er '.value' <<<"${response}")"
+          echo "::add-mask::${token}"
+          echo "SNOWFLAKE_TOKEN=${token}" >> "${GITHUB_ENV}"
+          echo "SNOWFLAKE_AUDIENCE=${SNOWFLAKE_OIDC_AUDIENCE}" >> "${GITHUB_ENV}"
+
+      - name: Test certification WIF connection
+        run: snow connection test -x
+
+      - name: Run real Snowflake certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/run_snowflake_certification.py \
+            --framework-git-sha "${ESF_FRAMEWORK_GIT_SHA}" \
+            --fixture certification/fixtures/canonical.yml \
+            --output-dir "${RUNNER_TEMP}/snowflake-certification"
+
+      - name: Clean certification schemas
+        if: always() && steps.oidc.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/run_snowflake_certification.py \
+            --framework-git-sha "${ESF_FRAMEWORK_GIT_SHA}" \
+            --fixture certification/fixtures/canonical.yml \
+            --output-dir "${RUNNER_TEMP}/snowflake-certification" \
+            --cleanup-only
+
+      - name: Upload certification report
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: snowflake-certification-${{ steps.trusted.outputs.sha }}
+          path: ${{ runner.temp }}/snowflake-certification/
+          if-no-files-found: warn
+          retention-days: 30
