@@ -11,7 +11,7 @@ APPEND_CONTRACT = {
     "source_timestamp": "event_timestamp",
     "columns": [
         {"name": "vehicle_id", "type": "VARCHAR", "nullable": False},
-        {"name": "event_timestamp", "type": "TIMESTAMP_NTZ", "nullable": False},
+        {"name": "event_timestamp", "type": "TIMESTAMP_NTZ", "nullable": True},
         {"name": "latitude", "type": "FLOAT", "nullable": False},
         {"name": "ingested_at", "type": "TIMESTAMP_NTZ", "nullable": False},
     ],
@@ -59,21 +59,24 @@ class InputIdempotencyTests(unittest.TestCase):
         sql = render_apply_sql("append", self._names("append"), APPEND_CONTRACT)
         self.assertIn("E_IDEMPOTENCY_CONFLICT EXCEPTION", sql)
         self.assertIn("V_IDEMPOTENCY_CONFLICTS", sql)
-        self.assertIn("HAVING COUNT(DISTINCT TO_VARCHAR(HASH(", sql)
+        self.assertIn("COUNT(DISTINCT TO_JSON(ARRAY_CONSTRUCT_KEEP_NULL(", sql)
         self.assertIn("GROUP BY I.VEHICLE_ID, I.EVENT_TIMESTAMP", sql)
         self.assertIn("PARTITION BY D.VEHICLE_ID, D.EVENT_TIMESTAMP", sql)
         self.assertIn("FROM ESF_NEW_EVENTS D", sql)
         self.assertIn("RAISE E_IDEMPOTENCY_CONFLICT", sql)
-        self.assertIn("T.VEHICLE_ID = N.VEHICLE_ID", sql)
+        self.assertIn("T.VEHICLE_ID IS NOT DISTINCT FROM N.VEHICLE_ID", sql)
+        self.assertIn("T.EVENT_TIMESTAMP IS NOT DISTINCT FROM N.EVENT_TIMESTAMP", sql)
 
     def test_append_replay_uses_same_batch_identity_guard(self) -> None:
         sql = render_replay_sql("append", self._names("append"), APPEND_CONTRACT)
         self.assertIn("ESF_REPLAY_INPUT", sql)
         self.assertIn("E_IDEMPOTENCY_CONFLICT EXCEPTION", sql)
+        self.assertIn("COUNT(DISTINCT TO_JSON(ARRAY_CONSTRUCT_KEEP_NULL(", sql)
         self.assertIn("GROUP BY I.VEHICLE_ID, I.EVENT_TIMESTAMP", sql)
         self.assertIn("PARTITION BY D.VEHICLE_ID, D.EVENT_TIMESTAMP", sql)
         self.assertIn("FROM ESF_REPLAY_INPUT D", sql)
-        self.assertIn("T.VEHICLE_ID = N.VEHICLE_ID", sql)
+        self.assertIn("T.VEHICLE_ID IS NOT DISTINCT FROM N.VEHICLE_ID", sql)
+        self.assertIn("T.EVENT_TIMESTAMP IS NOT DISTINCT FROM N.EVENT_TIMESTAMP", sql)
 
     def test_scd2_apply_identity_includes_stream_action(self) -> None:
         sql = render_apply_sql("scd2", self._names("scd2"), SCD2_CONTRACT)
@@ -84,7 +87,9 @@ class InputIdempotencyTests(unittest.TestCase):
             "PARTITION BY D.VEHICLE_ID, D.SOURCE_SEQUENCE, D.ESF_STREAM_ACTION", sql
         )
         self.assertIn("I.ESF_STREAM_ISUPDATE", sql)
-        self.assertIn("E.ESF_STREAM_ACTION = N.ESF_STREAM_ACTION", sql)
+        self.assertIn("E.VEHICLE_ID IS NOT DISTINCT FROM N.VEHICLE_ID", sql)
+        self.assertIn("E.SOURCE_SEQUENCE IS NOT DISTINCT FROM N.SOURCE_SEQUENCE", sql)
+        self.assertIn("E.ESF_STREAM_ACTION IS NOT DISTINCT FROM N.ESF_STREAM_ACTION", sql)
         self.assertIn("RAISE E_IDEMPOTENCY_CONFLICT", sql)
 
     def test_scd2_replay_stages_action_before_conflict_detection(self) -> None:
@@ -97,8 +102,11 @@ class InputIdempotencyTests(unittest.TestCase):
         self.assertIn(
             "PARTITION BY D.VEHICLE_ID, D.SOURCE_SEQUENCE, D.ESF_STREAM_ACTION", sql
         )
-        self.assertIn("E.ESF_STREAM_ACTION = N.ESF_STREAM_ACTION", sql)
+        self.assertIn("E.VEHICLE_ID IS NOT DISTINCT FROM N.VEHICLE_ID", sql)
+        self.assertIn("E.SOURCE_SEQUENCE IS NOT DISTINCT FROM N.SOURCE_SEQUENCE", sql)
+        self.assertIn("E.ESF_STREAM_ACTION IS NOT DISTINCT FROM N.ESF_STREAM_ACTION", sql)
         self.assertIn("RAISE E_IDEMPOTENCY_CONFLICT", sql)
+        self.assertLess(sql.index("RAISE E_IDEMPOTENCY_CONFLICT"), sql.index("DELETE FROM SILVER.TRANSPORT_SOURCE_VEHICLE_V1_HISTORY"))
 
     def test_unrelated_patterns_do_not_gain_the_new_batch_identity_guard(self) -> None:
         full_refresh = {
