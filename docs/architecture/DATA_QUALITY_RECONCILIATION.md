@@ -65,7 +65,7 @@ CALL dataset VALIDATE procedure
 
 Validation inserts one normalized result row per check into `CONTROL.DQ_RESULT`. A failed check is recorded as evidence; the default starter does not automatically fail the transformation Task. A domain may explicitly raise an exception for a hard-stop rule when that behavior is required.
 
-`020_validate.sql` is now part of the committed deployment fragment so the validation procedure exists before the Task is created.
+`020_validate.sql` is part of the committed deployment fragment so the validation procedure exists before the Task is created.
 
 ## Active vs candidate versions
 
@@ -77,6 +77,8 @@ v2 CANDIDATE -> retained for shadow/release review only
 ```
 
 A failing candidate must not make a healthy active production dataset red. After v2 becomes active, its latest DQ run becomes the health evidence for the logical dataset.
+
+Release remains explicit. Candidate DQ evidence is one input to engineer review; the Framework does not automatically approve or cut over a version.
 
 ## Reconciliation
 
@@ -114,16 +116,27 @@ details
 
 Versionless results are appropriate for boundaries such as Source -> Bronze. Version-specific results are appropriate where a Silver implementation version matters.
 
-## Status normalization
+For the same dataset/stage, active-version reconciliation evidence takes precedence over unversioned evidence. Recency is then used within that precedence. This prevents a newer generic result from masking evidence for the currently active Silver implementation.
 
-Check severity has two intended operational classes:
+## Fail-closed status normalization
+
+The evidence contract intentionally stays small:
 
 ```text
-ERROR -> failure contributes RED health and automatic incident
-WARN  -> failure contributes YELLOW health but no automatic failure incident
+severity: ERROR | WARN
+status:   PASS | FAIL
 ```
 
-Latest DQ status:
+The record procedures normalize unknown severity to `ERROR` and unknown status to `INVALID`. Latest-status views treat any status other than `PASS` as a failure. Malformed producer values therefore cannot silently become healthy evidence.
+
+Operational interpretation is:
+
+```text
+ERROR failure -> RED health and automatic failure incident
+WARN failure  -> YELLOW health, no automatic failure incident
+```
+
+Latest DQ/reconciliation status uses:
 
 ```text
 FAILED
@@ -131,8 +144,6 @@ WARNING
 PASS
 UNASSESSED
 ```
-
-Latest reconciliation status uses the same shape.
 
 ## Incident lifecycle
 
@@ -153,9 +164,9 @@ continued failure    -> update same incident key
 new successful evidence -> RESOLVED
 ```
 
-Only active-production DQ failures participate in automatic DQ incidents. Reconciliation chooses the latest relevant active-version or versionless evidence per stage.
+Only active-production DQ failures participate in automatic DQ incidents. Reconciliation uses the active-version/versionless precedence described above.
 
-The one-minute serverless `CONTROL.EVALUATE_QUALITY_INCIDENTS_TASK` is created suspended. Resume it explicitly after migration review, just like the existing health task.
+The one-minute serverless `CONTROL.EVALUATE_QUALITY_INCIDENTS_TASK` is created suspended. It is deliberately separate from the existing domain-health task so adopting migration 080 cannot replace or silently suspend a task that an existing domain already operates. Resume it explicitly after migration review.
 
 ## Dashboard contract
 
@@ -183,7 +194,13 @@ DECOMMISSIONED
 PAUSED
 ```
 
-The enterprise read-only export carries these additional fields. Enterprise monitoring still does not recalculate DQ, SLA, or health.
+The enterprise read-only export carries the additional quality fields. Enterprise monitoring still does not recalculate DQ, reconciliation, SLA, or health.
+
+Because migration 080 extends the export schema, cross-domain `SELECT * UNION ALL` consumers must coordinate rollout across participating domains. During staggered upgrades, select an explicit common column set centrally.
+
+## Evidence detail
+
+`CONTROL.DATASET_QUALITY_STATUS_V` is the one-row-per-dataset operational summary. `CONTROL.DATASET_QUALITY_DETAIL_V` is the inspectable evidence surface combining raw DQ and reconciliation results. It is not a rule catalog and contains no executable rule SQL.
 
 ## Repair relationship
 
@@ -210,5 +227,6 @@ Continue to reject:
 - auto-generated business DQ rules;
 - naive universal row-count reconciliation;
 - candidate DQ failures poisoning active production health;
+- malformed evidence values silently counting as success;
 - automatic mutation of production data after a failed check;
 - cross-domain writes for enterprise monitoring.
