@@ -108,9 +108,13 @@ class SnowflakeCertificationContractTests(unittest.TestCase):
         self.assertIn("actions/upload-artifact@v4.6.2", text)
 
     def test_runner_contract_covers_migration_task_release_and_grant_certification(self) -> None:
-        text = (
+        runtime = (
             REPO_ROOT / "src" / "enterprise_snowflake_framework" / "certification_snowflake.py"
         ).read_text(encoding="utf-8")
+        scenarios = (
+            REPO_ROOT / "src" / "enterprise_snowflake_framework" / "certification_scenarios.py"
+        ).read_text(encoding="utf-8")
+        combined = runtime + "\n" + scenarios
         for expected in (
             "apply_once_repeat_deploy",
             "migration_checksum_drift",
@@ -126,7 +130,7 @@ class SnowflakeCertificationContractTests(unittest.TestCase):
             "CONTROL.VERSION_VALIDATION",
             "CONTROL.DQ_RESULT",
         ):
-            self.assertIn(expected, text)
+            self.assertIn(expected, combined)
 
 
 if __name__ == "__main__":
