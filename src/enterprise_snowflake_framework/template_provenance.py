@@ -11,7 +11,7 @@ import yaml
 
 # Keep this release identity explicit and deterministic. A contract test keeps it in sync
 # with pyproject.toml. Generated files must not depend on wall-clock time or Git state.
-FRAMEWORK_VERSION = "0.22.0"
+FRAMEWORK_VERSION = "0.23.0"
 
 VERSION_RE = re.compile(r"^v([1-9][0-9]*)$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -171,10 +171,15 @@ _CUSTOM_ARTIFACTS = (
 
 # Historical revisions must stay here after a new revision is introduced. upgrade-plan
 # verifies a declared digest against this registry; it never reverse-engineers old SQL.
+# Revision 2 of the Stream/Task templates declares version-local Task operational policy.
 _TEMPLATE_HISTORY: dict[str, dict[int, TemplateSpec]] = {
-    "append_stream_task": {1: TemplateSpec("append_stream_task", 1, _STREAM_TASK_ARTIFACTS)},
+    "append_stream_task": {
+        1: TemplateSpec("append_stream_task", 1, _STREAM_TASK_ARTIFACTS),
+        2: TemplateSpec("append_stream_task", 2, _STREAM_TASK_ARTIFACTS),
+    },
     "full_refresh_stream_task": {
-        1: TemplateSpec("full_refresh_stream_task", 1, _STREAM_TASK_ARTIFACTS)
+        1: TemplateSpec("full_refresh_stream_task", 1, _STREAM_TASK_ARTIFACTS),
+        2: TemplateSpec("full_refresh_stream_task", 2, _STREAM_TASK_ARTIFACTS),
     },
     "full_refresh_dynamic_table": {
         1: TemplateSpec("full_refresh_dynamic_table", 1, _DYNAMIC_TABLE_ARTIFACTS)
@@ -182,11 +187,17 @@ _TEMPLATE_HISTORY: dict[str, dict[int, TemplateSpec]] = {
     "full_refresh_batch_sql": {
         1: TemplateSpec("full_refresh_batch_sql", 1, _BATCH_SQL_ARTIFACTS)
     },
-    "scd1_stream_task": {1: TemplateSpec("scd1_stream_task", 1, _STREAM_TASK_ARTIFACTS)},
+    "scd1_stream_task": {
+        1: TemplateSpec("scd1_stream_task", 1, _STREAM_TASK_ARTIFACTS),
+        2: TemplateSpec("scd1_stream_task", 2, _STREAM_TASK_ARTIFACTS),
+    },
     "scd1_dynamic_table": {
         1: TemplateSpec("scd1_dynamic_table", 1, _DYNAMIC_TABLE_ARTIFACTS)
     },
-    "scd2_stream_task": {1: TemplateSpec("scd2_stream_task", 1, _STREAM_TASK_ARTIFACTS)},
+    "scd2_stream_task": {
+        1: TemplateSpec("scd2_stream_task", 1, _STREAM_TASK_ARTIFACTS),
+        2: TemplateSpec("scd2_stream_task", 2, _STREAM_TASK_ARTIFACTS),
+    },
     "custom_custom": {1: TemplateSpec("custom_custom", 1, _CUSTOM_ARTIFACTS)},
 }
 
