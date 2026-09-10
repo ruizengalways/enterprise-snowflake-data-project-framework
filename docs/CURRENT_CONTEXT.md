@@ -4,7 +4,7 @@
 
 This repository is a project-creation and operations toolkit for readable Enterprise Snowflake domain repositories. It is not a universal data runtime.
 
-The framework owns safe project/source scaffolding, RAW/Silver contract validation, explicit pattern source-code generation, domain-local control-plane foundations and reusable CI/deployment workflows. Existing ownership units are never overwritten by scaffolding.
+The framework owns safe project/source scaffolding, reviewed RAW/Silver contract validation, explicit pattern source-code generation, domain-local control-plane foundations and reusable CI/deployment workflows. Existing ownership units are never overwritten by scaffolding.
 
 ## Domain boundary
 
@@ -16,6 +16,35 @@ enterprise-snowflake-transport-analytics
 ```
 
 A domain may contain many sources. Source boundaries are preserved in repository paths and new Snowflake object names. Existing domain-owned pipelines are never renamed automatically.
+
+## RAW contract authoring
+
+RAW contracts are reviewed engineering declarations. The Framework does not inspect source catalogs, profile sources, infer business keys, infer source timestamps/order, choose CDC/delete semantics or choose an SCD pattern.
+
+Incomplete contract work lives outside the production contract boundary:
+
+```text
+contracts/drafts/<source>/<dataset>.yml
+```
+
+`esf raw-contract-draft` creates one TODO-rich draft and never overwrites it. `esf raw-contract-finalize` refuses unresolved TODO values, applies the canonical RAW schema/semantic validation, and moves the exact reviewed bytes into:
+
+```text
+contracts/raw/<source>/<dataset>.yml
+```
+
+Drafts are not scanned by `esf validate`. Finalization never overwrites an existing formal contract and does not add the dataset declaration or scaffold Silver. The intended sequence is:
+
+```text
+source evidence / judgement
+  -> raw-contract-draft
+  -> engineer edits/reviews
+  -> raw-contract-finalize
+  -> add-dataset
+  -> plan / scaffold-preview / scaffold
+```
+
+Source profiling/discovery remains a future optional separate repository, not a dependency of this Framework.
 
 ## Ingestion
 
@@ -122,6 +151,6 @@ These remain exploratory domain work. The Framework keeps skeletons/examples but
 
 ## Architectural guardrails
 
-Continue to reject deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, connector offset/checkpoint ownership, shared writable cross-domain control planes, hidden active-version switching, automatic production repair execution, automatic SLA threshold inference, destructive one-click decommission and automatic business Mart/KPI/Semantic generation.
+Continue to reject source-profiling/discovery inside this repo, deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, connector offset/checkpoint ownership, shared writable cross-domain control planes, hidden active-version switching, automatic production repair execution, automatic business-key/SCD/SLA inference, destructive one-click decommission and automatic business Mart/KPI/Semantic generation.
 
 The control plane may centralize operational health/version/incident/lifecycle/run-evidence logic inside a domain, but must not hide dataset transformation behavior.
