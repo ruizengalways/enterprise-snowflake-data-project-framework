@@ -53,6 +53,7 @@ PROJECT_TEMPLATE_FILES = {
     "control_plane/sql/040_health_task.sql": "control_plane_040_health_task.sql",
     "control_plane/sql/050_dataset_lifecycle_status.sql": "control_plane_050_dataset_lifecycle_status.sql",
     "control_plane/sql/060_run_evidence_api.sql": "control_plane_060_run_evidence_api.sql",
+    "control_plane/sql/070_enterprise_health_export.sql": "control_plane_070_enterprise_health_export.sql",
     "dbt/README.md": "dbt_README.md",
     "dbt/dbt_project.yml": "dbt_project.yml",
     "dbt/profiles.yml": "profiles.yml",
@@ -65,6 +66,7 @@ PROJECT_TEMPLATE_FILES = {
     "operations/sla/README.md": "sla_README.md",
     "operations/lifecycle/README.md": "lifecycle_README.md",
     "docs/DOMAIN_DECOMMISSION.md": "domain_decommission.md",
+    "docs/ENTERPRISE_HEALTH_EXPORT.md": "enterprise_health_export.md",
 }
 
 

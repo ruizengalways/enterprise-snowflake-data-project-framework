@@ -94,6 +94,7 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
         dbt_project.write_text(old_dbt_project, encoding="utf-8")
 
         (self.root / "control_plane" / "sql" / "060_run_evidence_api.sql").unlink()
+        (self.root / "control_plane" / "sql" / "070_enterprise_health_export.sql").unlink()
         (self.root / "dbt" / "macros" / "esf_observability.sql").unlink()
         (self.root / "dbt" / "README.md").unlink()
         (self.root / "ingestion" / "RUN_EVIDENCE.md").unlink()
@@ -104,13 +105,17 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
         self.assertEqual(old_manifest, manifest.read_text(encoding="utf-8"))
         self.assertEqual(old_dbt_project, dbt_project.read_text(encoding="utf-8"))
         self.assertTrue((self.root / "control_plane" / "sql" / "060_run_evidence_api.sql").is_file())
+        self.assertTrue((self.root / "control_plane" / "sql" / "070_enterprise_health_export.sql").is_file())
         self.assertTrue((self.root / "dbt" / "macros" / "esf_observability.sql").is_file())
         self.assertTrue((self.root / "ingestion" / "RUN_EVIDENCE.md").is_file())
 
         plan = build_control_plan(self.root)
         self.assertFalse(plan.ready)
         self.assertEqual(
-            ("control_plane/sql/060_run_evidence_api.sql",),
+            (
+                "control_plane/sql/060_run_evidence_api.sql",
+                "control_plane/sql/070_enterprise_health_export.sql",
+            ),
             plan.missing_from_manifest,
         )
         self.assertNotIn("esf_record_dbt_results", dbt_project.read_text(encoding="utf-8"))

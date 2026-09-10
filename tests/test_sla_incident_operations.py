@@ -75,6 +75,7 @@ class SlaIncidentOperationTests(unittest.TestCase):
             "040_health_task.sql",
             "050_dataset_lifecycle_status.sql",
             "060_run_evidence_api.sql",
+            "070_enterprise_health_export.sql",
         }
         actual = {path.name for path in (self.root / "control_plane" / "sql").glob("*.sql")}
         self.assertEqual(expected, actual)
@@ -96,6 +97,7 @@ class SlaIncidentOperationTests(unittest.TestCase):
             "040_health_task.sql",
             "050_dataset_lifecycle_status.sql",
             "060_run_evidence_api.sql",
+            "070_enterprise_health_export.sql",
         ):
             (self.root / "control_plane" / "sql" / name).unlink()
 
@@ -110,6 +112,7 @@ class SlaIncidentOperationTests(unittest.TestCase):
                 "control_plane/sql/040_health_task.sql",
                 "control_plane/sql/050_dataset_lifecycle_status.sql",
                 "control_plane/sql/060_run_evidence_api.sql",
+                "control_plane/sql/070_enterprise_health_export.sql",
             ),
             plan.missing_from_manifest,
         )
