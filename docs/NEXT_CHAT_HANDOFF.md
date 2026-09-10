@@ -1,26 +1,30 @@
 # Next chat handoff
 
-Read this file first when continuing the Framework in a new conversation. Then read `docs/CURRENT_CONTEXT.md`, `docs/architecture/RUN_EVIDENCE.md`, and the architecture document most relevant to the next task.
+Read this file first when continuing the Framework in a new conversation. Then read `docs/CURRENT_CONTEXT.md` and the architecture document most relevant to the task.
 
 ## Stable repository state
 
 ```text
 repository = ruizengalways/enterprise-snowflake-data-project-framework
-version    = 0.20.0
-0.20 code merge = 8647190c175d4c6b815e46eb78574aea475a5040
-merged PR  = #29 fix: make Silver pipeline metrics semantically consistent
-PR CI      = Silver-first Toolkit CI #263 = SUCCESS
-main CI    = Silver-first Toolkit CI #264 = SUCCESS
-Snowflake certification workflow run #20 = SKIPPED
+version    = 0.22.0
+0.22 code merge = ee6044db2b0f0e1b67ee929fecacdcc0080520bd
+merged PR  = #32 feat: add template provenance and read-only upgrade planning
+PR CI      = Silver-first Toolkit CI #287 = SUCCESS
+main CI    = Silver-first Toolkit CI #288 = SUCCESS
+Snowflake Framework Certification #44 = SKIPPED
 ```
 
-This handoff is committed after the 0.20 code merge, so always re-check the current `main` SHA before changing code. The certification skip is intentional while the trusted Snowflake certification environment is not explicitly enabled/configured. **No 0.20.0 SHA has yet produced a real `status = CERTIFIED` Snowflake artifact.** Static CI is not Snowflake certification.
+Always re-check current `main`, open PRs and CI before modifying code. The certification skip is intentional while the trusted Snowflake certification environment is not enabled/configured. **No 0.22.0 SHA has yet produced a real `status = CERTIFIED` Snowflake artifact.** Static CI is not Snowflake certification.
 
-## What 0.20 changed
+## Completed roadmap work
 
-0.20 fixes a real observability semantics problem. Older generated procedures could treat Snowflake `SQLROWCOUNT` after `MERGE` as if it meant update-only rows. It does not: it is the total row count affected by that DML statement. Older generated code also assigned `QUERY_ID = LAST_QUERY_ID()` only during later success logging, so the recorded ID could refer to a logging/transaction statement rather than the transformation DML.
+Do not redesign or repeat these completed features unless new evidence identifies a defect.
 
-New generated explicit Silver apply procedures use canonical metrics contract version 1:
+### 0.20 — canonical explicit-pipeline metrics
+
+`110_pipeline_execution_metrics.sql` corrected misleading `PIPELINE_RUN` row-count/query-id semantics for newly generated explicit apply procedures.
+
+Canonical contract:
 
 ```text
 METRICS_CONTRACT_VERSION
@@ -34,47 +38,107 @@ METRICS VARIANT
 STATUS / timestamps / errors
 ```
 
-The invariant is:
+Invariant:
 
 ```text
-ROWS_AFFECTED
-  = SQLROWCOUNT for the primary Silver DML
-
-DML_QUERY_ID
-  = SQLID captured immediately after that same DML
+ROWS_AFFECTED = SQLROWCOUNT for the primary Silver DML
+DML_QUERY_ID  = SQLID captured immediately after that same DML
 ```
 
-`AFFECTED_BUSINESS_KEYS` is the number of distinct logical keys considered in the run. Pattern-specific physical work belongs in `METRICS`, not in misleading universal columns.
+Do not reintroduce universal insert/update/delete semantics for `MERGE` or mix SCD2 event-ledger work with history rebuild counts. Old `ROWS_INSERTED`, `ROWS_UPDATED`, `ROWS_DELETED` columns remain historical compatibility fields. See `docs/architecture/RUN_EVIDENCE.md`.
 
-Pattern behavior:
+### 0.21 — release readiness and active/candidate invariants
+
+`120_release_readiness.sql` and the generated release bundle now enforce fail-closed release/rollback behavior.
+
+Current path:
 
 ```text
-append
-  canonical rows_affected = output INSERT rows
-  metrics.output_rows_inserted
-
-full_refresh
-  canonical rows_affected = INSERT OVERWRITE rows written
-  metrics.snapshot_rows_written
-
-scd1
-  canonical rows_affected = total MERGE rows affected
-  metrics.merge_rows_affected
-  do NOT label this ROWS_UPDATED
-
-scd2
-  canonical rows_affected = rebuilt history INSERT rows
-  metrics.events_inserted
-  metrics.history_rows_deleted
-  metrics.history_rows_rebuilt
-  each important DML also keeps its own captured query id
+candidate deploy
+  -> bootstrap / refresh
+  -> catch up
+  -> DQ
+  -> active-vs-candidate compare
+  -> preflight.sql
+  -> activate.sql
+  -> postflight.sql
+  -> CONTROL.RELEASE_RUN audit
+  -> guarded rollback.sql if required
 ```
 
-The old `ROWS_INSERTED`, `ROWS_UPDATED`, `ROWS_DELETED` columns remain for historical compatibility. They are not a cross-pattern contract. New code only fills them when the meaning is unambiguous; SCD1/SCD2 do not fabricate a breakdown.
+Important invariants:
 
-## Control Plane through 0.20
+```text
+release from_version must equal ACTIVE_VERSION
+candidate != active
+at most one intended candidate
+CANDIDATE_VERSION cannot be silently replaced by another candidate
+candidate/runtime/DQ/comparison evidence must be current enough
+BLOCKED has no bypass
+REVIEW_REQUIRED requires explicit acceptance + reason
+postflight verifies published object / CONTROL / runtime state
+stale rollback or rollback across a newer candidate cycle fails closed
+```
 
-Fresh domain control manifest includes:
+Hard preflight occurs after candidate catch-up/DQ/comparison. `activate.sql` must not refresh/resume the candidate after hard preflight and thereby invalidate reviewed evidence. Stable published views use `CREATE OR REPLACE VIEW ... COPY GRANTS` only at the explicit release/rollback boundary.
+
+Keep `CONTROL.DATASET.CANDIDATE_VERSION` for now as a single-candidate convenience/lock. Do not replace it with a speculative large state machine until real operations own each transition.
+
+### 0.22 — template provenance and read-only upgrade planning
+
+Every newly scaffolded implementation version now declares:
+
+```text
+provenance:
+  framework_version
+  template_id
+  template_revision
+  template_digest
+```
+
+The compatibility identity is immutable template id + revision + digest. No scaffold timestamp is used, so generation remains deterministic.
+
+`esf upgrade-plan --project-root .` is read-only and reports:
+
+```text
+CURRENT
+UPDATE_AVAILABLE
+ADVISORY
+UNKNOWN
+UNVERIFIED
+```
+
+Critical rule: pre-provenance versions report `UNKNOWN`. **Never infer a template revision from SQL, comments, object names or formatting.** Digest mismatch is `UNVERIFIED`, not guessed. The default advisory catalog remains empty until a real released template revision needs an advisory; do not fabricate incidents merely to demonstrate the mechanism. See `docs/architecture/TEMPLATE_PROVENANCE.md`.
+
+## Canonical naming vocabulary
+
+Keep logical architecture vocabulary separate from physical schema naming.
+
+Logical layers:
+
+```text
+Bronze
+Silver
+Gold / Marts
+Semantic
+Control
+```
+
+Default physical schemas:
+
+```text
+BRONZE
+SILVER
+GOLD_MARTS
+SEMANTIC
+CONTROL
+```
+
+Do not bulk-rename `GOLD_MARTS` to `GOLD` for prose consistency. `Control` is cross-cutting operational evidence/state. `PLATFORM_CONTROL` may appear in negative/deprecated explanations such as “do not build a shared writable PLATFORM_CONTROL”; static checks should validate positive canonical contracts rather than grep-ban every occurrence. See `docs/architecture/NAMING_AND_LAYERS.md`.
+
+## Current Control Plane manifest
+
+Fresh 0.22 projects include all of:
 
 ```text
 001_objects.sql
@@ -89,35 +153,16 @@ Fresh domain control manifest includes:
 090_dataset_execution_model.sql
 100_dynamic_table_observability.sql
 110_pipeline_execution_metrics.sql
+120_release_readiness.sql
 ```
 
-Never edit already released 001..110 migration templates in place after release. Future fixes append a later migration.
+Released numbered migrations are immutable. Never edit 001..120 in place after release; append a later migration.
 
-Migration 110 adds to `CONTROL.PIPELINE_RUN`:
-
-```text
-METRICS_CONTRACT_VERSION
-ROWS_AFFECTED
-AFFECTED_BUSINESS_KEYS
-DML_QUERY_ID
-METRICS
-```
-
-and creates the stable read surface:
-
-```text
-CONTROL.PIPELINE_EXECUTION_METRICS_V
-```
-
-The view aliases existing timing evidence as `DATA_MAX_AT` / `PUBLISHED_AT` and exposes old row-count fields with `LEGACY_` names for audit.
-
-Migration 110 does not rewrite existing generated apply procedures. Generated-once/domain-owned still means old implementations keep their historical SQL until a domain creates a new implementation version or manually migrates its owned code.
-
-For an old domain, rerun `esf init-project` to materialize missing migration files, review `esf control-plan`, and explicitly append adopted migrations without reordering already-applied entries. `esf-control-preflight` now recognizes 110 as a Framework migration.
+For an older domain, rerun `esf init-project` to materialize missing Framework files, inspect `esf control-plan`, and explicitly append adopted migrations without reordering already-recorded history. Deployment stays checksum-locked/apply-once.
 
 ## Core model that remains stable
 
-Logical dataset semantics and version implementation technology remain separate:
+Logical semantics and implementation technology remain separate:
 
 ```text
 logical dataset
@@ -127,9 +172,9 @@ implementation version
   execution_model = stream_task | dynamic_table | batch_sql | custom
 ```
 
-The source manifest stores semantic `pattern` and `raw_contract`; it does not store `execution_model`.
+The source manifest stores semantic `pattern` and `raw_contract`; it does not store execution-model policy.
 
-Supported execution matrix remains deliberately fail-closed:
+Supported matrix remains deliberately narrow:
 
 ```text
 append       + stream_task   = supported
@@ -139,14 +184,10 @@ full_refresh + batch_sql     = supported
 scd1         + stream_task   = supported
 scd1         + dynamic_table = supported
 scd2         + stream_task   = supported
-custom       + custom        = supported / domain-owned
-
-append       + dynamic_table = rejected
-scd2         + dynamic_table = rejected
-other unimplemented combinations = rejected
+custom       + custom        = domain-owned
 ```
 
-Do not add `procedure` as an execution model; it is an implementation artifact.
+Unsupported combinations fail closed. `procedure` is an implementation artifact, not an execution model. See `docs/architecture/EXECUTION_MODELS.md`.
 
 ## Observability boundary
 
@@ -155,7 +196,7 @@ Unify observability contracts, not runtime mechanics:
 ```text
 explicit Stream/Task or batch apply
   -> CONTROL.PIPELINE_RUN
-  -> CONTROL.PIPELINE_EXECUTION_METRICS_V for canonical explicit-run metrics
+  -> CONTROL.PIPELINE_EXECUTION_METRICS_V
 
 Dynamic Table
   -> INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY
@@ -166,79 +207,62 @@ both
   -> health / SLA
 ```
 
-Do not insert fake `PIPELINE_RUN` rows for Dynamic Tables and do not add a second competing unified Silver observability view unless there is a concrete missing contract that cannot fit the current surface.
+Do not insert fake `PIPELINE_RUN` rows for Dynamic Tables. Do not create a second competing unified Silver observability abstraction unless a concrete contract cannot fit the existing path.
 
-## Deployment / DDL / release guardrails
+## Deployment / DDL / ownership guardrails
 
-CONTROL and SILVER are checksum-locked apply-once migrations. Same applied path/checksum skips; changed/reordered/removed applied history or unresolved STARTED/FAILED blocks.
+Framework generates once; domain owns forever. Existing dataset/version SQL is not rewritten by framework upgrades.
 
-New persistent version-owned objects are create-only/fail-closed. Candidate deployment never changes stable consumer objects. Explicit release/rollback is the only generated stable-view replacement boundary and uses `CREATE OR REPLACE VIEW ... COPY GRANTS`. Old runtime processing is retired last.
+CONTROL and SILVER are checksum-locked apply-once migrations. Same applied path/checksum/order skips; changed/reordered/removed applied history or unresolved STARTED/FAILED blocks.
 
-Do not introduce deployment-time scaffolding, hidden runtime metadata routing, a central SCD engine, or dbt as the Bronze-to-Silver engine.
+New persistent version-owned objects are create-only/fail-closed. Candidate deployment never changes stable consumer objects. Explicit release/rollback is the only generated stable-view replacement boundary and uses `COPY GRANTS`.
 
-## Dynamic Table remains first-class
-
-Dynamic Table supports `scd1` and `full_refresh` in the current matrix. It does not generate fake Stream/Task/apply/replay artifacts. Native refresh history remains its execution evidence. Lifecycle, repair, release, rollback and certification are execution-model aware.
-
-The trusted certification suite includes a cross-execution-model scenario:
-
-```text
-SCD1 v1 stream_task
-  -> v2 dynamic_table
-  -> native refresh / catch-up
-  -> DQ + comparison
-  -> COPY GRANTS cutover
-  -> health
-  -> rollback
-```
-
-A revision is only Snowflake-certified when the trusted workflow emits `snowflake-certification.json` with `status = CERTIFIED` for that exact SHA.
+Do not introduce deployment-time scaffolding, hidden runtime metadata routing, a central SCD engine, arbitrary orchestration DSLs, or dbt as the Bronze-to-Silver engine.
 
 ## Immediate next implementation priority
 
-Continue the roadmap in this order unless new live Snowflake evidence changes it:
+Continue in this order unless real Snowflake evidence changes priorities:
 
 ```text
-1. release preflight / postflight / RELEASE_RUN audit
-   + strict single-active/single-candidate invariants
-   (Prompt 8 + the invariant portion of Prompt 13)
+1. narrow Task operational configuration (Prompt 10)
 
-2. template provenance + read-only upgrade-plan advisory
-   (Prompt 7)
+   First version may support only:
+     - minimum trigger interval
+     - timeout
+     - suspend after failures
+     - warehouse override
+     - optional error integration
 
-3. documentation vocabulary consistency guard
-   (Prompt 12)
+   Do not add yet:
+     - generic task-graph retry / TASK_AUTO_RETRY_ATTEMPTS abstraction
+     - arbitrary schedules
+     - universal readiness DSL
+     - a general orchestration framework
 
-4. narrow Task operational configuration
-   (Prompt 10)
+2. configurable domain health evaluation interval (Prompt 11)
 
-5. configurable domain health evaluation interval via a NEW migration
-   (Prompt 11; never edit released 040)
+   Current released 040_health_task.sql contains the historical 1 MINUTE schedule.
+   NEVER edit released 040.
+   Introduce a new later migration/configuration mechanism instead.
+   Policy should support domain-appropriate cadence rather than asserting one global best value.
 
-6. Dynamic Table observability enrichment only if evidence is still missing
-   (Prompt 6; do not build a second abstraction)
+3. Dynamic Table observability enrichment (Prompt 6)
+
+   Migration 100 already provides the native evidence path and health consumes
+   CONTROL.DATASET_OBSERVABILITY_V. Only enrich concrete missing native fields such as
+   refresh action/trigger, target lag, statistics, state code/message or query id if useful.
+   Do not create another unified execution-health view.
 ```
 
-For the next feature, prefer strong release preconditions and audit over a large candidate state machine. Retain `CONTROL.DATASET.CANDIDATE_VERSION` for now but enforce invariants such as:
-
-```text
-exactly/at most one ACTIVE version as appropriate
-at most one candidate per logical dataset
-candidate != active
-CANDIDATE_VERSION references a non-retired version
-registering another candidate while one exists fails closed
-release from_version must equal ACTIVE_VERSION
-```
-
-Do not immediately replace the existing states with a speculative DEVELOPMENT/BOOTSTRAPPING/SHADOW/VALIDATED state machine unless real operations own every transition.
+Task operational settings must remain **version-local execution policy**. Do not put them in the logical dataset/source manifest or conflate them with SLA.
 
 ## New conversation starter
 
 ```text
 Continue enterprise-snowflake framework.
 First read docs/NEXT_CHAT_HANDOFF.md, docs/CURRENT_CONTEXT.md,
-docs/architecture/RUN_EVIDENCE.md and docs/architecture/EXECUTION_MODELS.md.
+docs/architecture/NAMING_AND_LAYERS.md and the architecture doc relevant to the task.
 Then re-check current GitHub main, open PRs and CI before modifying code.
 Continue from the immediate-next-work section; do not redesign completed apply-once,
-DDL safety, certification, execution-model separation or canonical metrics work.
+metrics, release-readiness, provenance, DDL safety, certification or execution-model work.
 ```
