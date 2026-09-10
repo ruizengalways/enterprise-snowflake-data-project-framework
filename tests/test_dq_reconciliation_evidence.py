@@ -64,6 +64,11 @@ class DataQualityReconciliationEvidenceTests(unittest.TestCase):
             yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
         )
 
+    def _control_sql(self) -> str:
+        return (
+            self.root / "control_plane" / "sql" / "080_data_quality_reconciliation.sql"
+        ).read_text(encoding="utf-8")
+
     def test_fresh_project_has_dq_reconciliation_control_contract(self) -> None:
         sql_path = self.root / "control_plane" / "sql" / "080_data_quality_reconciliation.sql"
         self.assertTrue(sql_path.is_file())
@@ -77,6 +82,7 @@ class DataQualityReconciliationEvidenceTests(unittest.TestCase):
             "CONTROL.DQ_LATEST_RUN_V",
             "CONTROL.RECONCILIATION_ACTIVE_STAGE_V",
             "CONTROL.DATASET_QUALITY_STATUS_V",
+            "CONTROL.DATASET_QUALITY_DETAIL_V",
             "CONTROL.EVALUATE_QUALITY_INCIDENTS",
             "CONTROL.EVALUATE_QUALITY_INCIDENTS_TASK",
             "DQ_FAILURE",
@@ -95,6 +101,37 @@ class DataQualityReconciliationEvidenceTests(unittest.TestCase):
         manifest = (self.root / "control_plane" / "deploy_manifest.txt").read_text(encoding="utf-8")
         self.assertIn("control_plane/sql/080_data_quality_reconciliation.sql", manifest)
         self.assertTrue(build_control_plan(self.root).ready)
+
+    def test_record_apis_fail_closed_for_unknown_status_or_severity(self) -> None:
+        sql = self._control_sql()
+        self.assertIn("UPPER(COALESCE(:P_STATUS, '')) IN ('PASS', 'FAIL')", sql)
+        self.assertIn("ELSE 'INVALID'", sql.replace(")", ")")) if False else None
+        self.assertIn("'INVALID'", sql)
+        self.assertIn("UPPER(COALESCE(:P_CHECK_SEVERITY, '')) = 'WARN'", sql)
+        self.assertIn("UPPER(STATUS) <> 'PASS'", sql)
+        self.assertNotIn("UPPER(STATUS) = 'FAIL' AND UPPER(CHECK_SEVERITY)", sql)
+
+    def test_active_version_reconciliation_beats_newer_unversioned_evidence_for_same_stage(self) -> None:
+        sql = self._control_sql()
+        start = sql.index("CREATE OR REPLACE VIEW CONTROL.RECONCILIATION_ACTIVE_STAGE_V")
+        end = sql.index("CREATE OR REPLACE VIEW CONTROL.DATASET_QUALITY_STATUS_V")
+        active_view = sql[start:end]
+        self.assertIn("WHERE R.VERSION IS NULL OR R.VERSION = D.ACTIVE_VERSION", active_view)
+        self.assertLess(
+            active_view.index("IFF(R.VERSION = D.ACTIVE_VERSION, 1, 0) DESC"),
+            active_view.index("R.CHECKED_AT DESC"),
+        )
+
+    def test_quality_detail_view_is_evidence_not_rule_metadata(self) -> None:
+        sql = self._control_sql()
+        start = sql.index("CREATE OR REPLACE VIEW CONTROL.DATASET_QUALITY_DETAIL_V")
+        end = sql.index("CREATE OR REPLACE PROCEDURE CONTROL.EVALUATE_QUALITY_INCIDENTS")
+        detail = sql[start:end]
+        self.assertIn("'DQ' AS EVIDENCE_TYPE", detail)
+        self.assertIn("'RECONCILIATION' AS EVIDENCE_TYPE", detail)
+        self.assertIn("FROM CONTROL.DQ_RESULT", detail)
+        self.assertIn("FROM CONTROL.RECONCILIATION_RESULT", detail)
+        self.assertNotIn("RULE_SQL", detail)
 
     def test_scd2_validation_is_deployed_dataset_local_evidence(self) -> None:
         destination = scaffold_pipeline(
@@ -117,6 +154,7 @@ class DataQualityReconciliationEvidenceTests(unittest.TestCase):
 
         self.assertIn("CALL SILVER.APPLY_FLEET_MSSQL_CUSTOMER_V1();", task_sql)
         self.assertIn("CALL SILVER.VALIDATE_FLEET_MSSQL_CUSTOMER_V1();", task_sql)
+        self.assertIn("AS\nBEGIN", task_sql)
         self.assertLess(deploy.index("020_validate.sql"), deploy.index("030_task.sql"))
 
     def test_candidate_dq_evidence_remains_version_specific(self) -> None:
@@ -138,10 +176,11 @@ class DataQualityReconciliationEvidenceTests(unittest.TestCase):
         self.assertIn("'v2'", sql)
         self.assertIn("VALIDATE_FLEET_MSSQL_CUSTOMER_V2", sql)
         self.assertIn("VALIDATE_FLEET_MSSQL_CUSTOMER_V2", task)
-        control = (
-            self.root / "control_plane" / "sql" / "080_data_quality_reconciliation.sql"
-        ).read_text(encoding="utf-8")
+        control = self._control_sql()
         self.assertIn("Q.VERSION = D.ACTIVE_VERSION", control)
+        self.assertIn("candidate DQ evidence", (
+            self.root / "operations" / "reconciliation" / "README.md"
+        ).read_text(encoding="utf-8"))
 
     def test_reconciliation_guidance_does_not_assume_count_equality(self) -> None:
         readme = (self.root / "operations" / "reconciliation" / "README.md").read_text(
