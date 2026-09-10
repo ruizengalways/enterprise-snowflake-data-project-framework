@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.13"
@@ -25,6 +26,10 @@ jobs:
       - run: |
           python -m pip install .
           python -m pip install -r requirements-dbt.txt
+
+      - name: Protect released control migration templates
+        if: github.event_name == 'pull_request'
+        run: python scripts/check_released_control_migrations.py --base "${{ github.event.pull_request.base.sha }}"
 
       - name: Validate reference project
         run: esf validate --project-root examples/silver-first-project
@@ -68,5 +73,6 @@ jobs:
           grep -Fq 'silver_processing/deploy_manifest.txt' .github/workflows/project-deploy.yml
           grep -Fq 'esf_record_dbt_results(results)' src/enterprise_snowflake_framework/templates/project/dbt_project.yml
           grep -Fq 'CONTROL.BEGIN_INGESTION_RUN' src/enterprise_snowflake_framework/templates/project/control_plane_060_run_evidence_api.sql
+          grep -Fq 'esf-migrate deploy' .github/workflows/project-deploy.yml
 
 # Live Snowflake/WIF acceptance remains a separate environment gate.
