@@ -62,17 +62,46 @@ BRONZE -> Stream/readiness -> Task -> dataset-local SQL procedure -> SILVER
 
 Standard patterns are append, full_refresh, scd1, scd2 and custom. Pattern algorithms are reused at scaffold time to generate explicit dataset-local source code. There is no central metadata-driven SCD runtime.
 
-New dataset starters include explicit object/apply/replay/validation/task/register/publish SQL plus policy and deploy-manifest fragments. Generated standard apply procedures write RUNNING/SUCCESS/FAILED evidence to `CONTROL.PIPELINE_RUN`.
+New standard dataset starters include explicit object/apply/replay/validation/task/register/publish SQL plus policy and deploy-manifest fragments. Generated apply procedures write RUNNING/SUCCESS/FAILED evidence to `CONTROL.PIPELINE_RUN`.
+
+A normal generated Task executes the dataset-local apply procedure and then its dataset-local validation procedure. `020_validate.sql` is committed, version-specific source code; it is not interpreted from runtime rule metadata.
+
+## Data quality and reconciliation
+
+Control migration 080 adds normalized evidence rather than a generic DQ engine:
+
+```text
+dataset-local validation SQL -> CONTROL.DQ_RESULT
+reconciliation code           -> CONTROL.RECONCILIATION_RESULT
+```
+
+The Framework-generated structural DQ starters are intentionally narrow:
+
+```text
+append       -> duplicate idempotency key + NULL business key
+scd1         -> duplicate business key + NULL business key
+full_refresh -> duplicate business key + NULL business key
+scd2         -> multiple active rows + NULL business key + overlapping periods
+custom       -> domain-authored
+```
+
+Business DQ remains domain-owned after scaffold. Reconciliation is not inferred; the domain chooses the correct comparison for Source -> Bronze, Bronze -> Silver or other boundaries and records a normalized result through `CONTROL.RECORD_RECONCILIATION_RESULT` when useful.
+
+Evidence status is fail-closed. Intended severity is `ERROR` or `WARN`; unknown severity is normalized to `ERROR`. Intended status is `PASS` or `FAIL`; unknown status is stored as `INVALID` and evaluated as a failure rather than silently treated as success.
+
+DQ evidence is version-specific. Only the active implementation version contributes to production DQ health; candidate evidence is retained for shadow/release review. For reconciliation, version-specific active evidence is preferred over unversioned evidence for the same stage; versionless evidence remains appropriate for non-versioned boundaries such as Source -> Bronze.
+
+`ERROR` failures contribute red health and automatic `DQ_FAILURE` / `RECONCILIATION_FAILURE` incidents. `WARN` failures contribute yellow health without creating an automatic failure incident. The quality-incident evaluator has its own serverless task, created suspended, so adopting migration 080 cannot replace or silently suspend an existing domain-health task.
 
 ## Domain-local control plane
 
 Each domain owns its own `CONTROL` schema. Do not create one shared writable `PLATFORM_CONTROL` database across all domains.
 
-The control plane includes dataset/version identity, lifecycle, SLA policy, ingestion/pipeline/dbt run evidence, health, incidents, version validation and repair audit.
+The control plane includes dataset/version identity, lifecycle, SLA policy, ingestion/pipeline/dbt run evidence, DQ/reconciliation evidence, health, incidents, version validation and repair audit.
 
 Logical dataset lifecycle is explicit: `ACTIVE`, `PAUSED`, `DECOMMISSIONED`.
 
-Control-plane upgrades remain explicit. Rerunning `init-project` creates newly introduced missing files without overwriting existing files or the domain-owned deploy manifest. `esf control-plan` reports repo/manifest gaps.
+Control-plane upgrades remain explicit. Rerunning `init-project` creates newly introduced missing files without overwriting existing files or the domain-owned deploy manifest. `esf control-plan` reports repo/manifest gaps. Fresh projects include migrations through `080_data_quality_reconciliation.sql`.
 
 ## Enterprise health export
 
@@ -83,9 +112,11 @@ CONTROL.ENTERPRISE_HEALTH_EXPORT_V
 CONTROL.DOMAIN_HEALTH_SUMMARY_V
 ```
 
-The export includes an explicit domain code and current domain database plus the already-evaluated lifecycle, stage status, SLA, latency, freshness, incident and overall-health fields. It does not recalculate or reinterpret domain health.
+After migration 080 the export includes lifecycle, stage status, DQ status, reconciliation status, SLA, latency, freshness, incident and overall-health fields. Enterprise monitoring does not rerun or reinterpret domain DQ/SLA logic.
 
-A separate enterprise monitoring repository/database explicitly UNIONs the participating domain views. It owns cross-domain presentation only; it does not write to domain `CONTROL` schemas. Cross-domain grants remain platform-infrastructure concerns.
+A separate enterprise monitoring repository/database explicitly UNIONs participating domain views. It owns cross-domain presentation only; it does not write to domain `CONTROL` schemas. Cross-domain grants remain platform-infrastructure concerns.
+
+Because migration 080 extends the stable export columns, participating domains should be upgraded coherently before a central `SELECT * UNION ALL` contract is changed. During staggered upgrades, explicitly select the shared column set in the central view.
 
 Removing a domain means removing that domain's read branch/grant after the retention decision. Other domain control planes remain unchanged.
 
@@ -94,7 +125,9 @@ Removing a domain means removing that domain's read branch/grant after the reten
 ```text
 source-specific ingestion -> CONTROL.INGESTION_RUN
 Silver apply procedure    -> CONTROL.PIPELINE_RUN
+Silver validation         -> CONTROL.DQ_RESULT
 dbt model result          -> CONTROL.DBT_RUN
+reconciliation code       -> CONTROL.RECONCILIATION_RESULT
 ```
 
 New dbt projects include an `on-run-end` macro. A model only participates in one logical dataset's Gold health when it explicitly declares `config.meta.esf_dataset_id`; cross-dataset business marts should normally remain unmapped. Existing domain repos are not silently opted into dbt logging because `init-project` never rewrites an existing `dbt_project.yml`.
@@ -111,13 +144,13 @@ Candidate versions live under `silver_processing/<source>/<dataset>/versions/vN/
 scaffold -> deploy -> bootstrap/replay -> catch up -> shadow -> validate -> compare -> release SQL -> explicit cutover
 ```
 
-`release-sql` generates activate/rollback SQL for review. `esf` never executes it.
+Candidate DQ evidence remains version-specific and must be reviewed together with version comparison evidence before release. `release-sql` generates activate/rollback SQL for review; `esf` never executes it and does not automatically approve a candidate.
 
 ## SLA and observability
 
 SLA belongs to the logical dataset, not to the source manifest or implementation version. Supported cadence types are `CONTINUOUS`, `INTERVAL` and `SCHEDULED_DEADLINE`. Latency and freshness are separate metrics. Stage policy can cover Source -> Bronze, Bronze -> Silver, Silver -> Gold and end-to-end freshness.
 
-`CONTROL.EVALUATE_DOMAIN_HEALTH()` refreshes health and automatic ingestion/pipeline/dbt/SLA incidents. A sustained condition reuses one incident key; recovery resolves it. The domain health task is serverless and created suspended.
+`CONTROL.EVALUATE_DOMAIN_HEALTH()` refreshes base timing/SLA health and automatic ingestion/pipeline/dbt/SLA incidents. `CONTROL.EVALUATE_QUALITY_INCIDENTS()` separately manages DQ/reconciliation failure incidents. Sustained conditions reuse an incident key; recovery resolves it. Both serverless tasks are created suspended.
 
 ## Dataset lifecycle
 
@@ -145,12 +178,14 @@ custom       -> domain-authored
 
 A new empty candidate should normally use a full bootstrap with no range bounds. Bounded replay assumes a correct candidate baseline outside the requested range. Full-refresh rejects time ranges. All standard replay procedures write `CONTROL.REPAIR_RUN` evidence. Active production is not changed until a separately generated and reviewed release.
 
+DQ/reconciliation evidence helps identify whether Bronze, Silver or a boundary is wrong; it does not automatically execute repair.
+
 ## Gold / KPI / Semantic
 
 These remain exploratory domain work. The Framework keeps skeletons/examples but does not auto-generate business marts, KPI SQL or semantic business models.
 
 ## Architectural guardrails
 
-Continue to reject source-profiling/discovery inside this repo, deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, connector offset/checkpoint ownership, shared writable cross-domain control planes, hidden active-version switching, automatic production repair execution, automatic business-key/SCD/SLA inference, destructive one-click decommission and automatic business Mart/KPI/Semantic generation.
+Continue to reject source-profiling/discovery inside this repo, deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, connector offset/checkpoint ownership, generic executable DQ rules in CONTROL, naive universal reconciliation, shared writable cross-domain control planes, hidden active-version switching, automatic production repair execution, automatic business-key/SCD/SLA inference, destructive one-click decommission and automatic business Mart/KPI/Semantic generation.
 
-The control plane may centralize operational health/version/incident/lifecycle/run-evidence logic inside a domain, but must not hide dataset transformation behavior.
+The control plane may centralize operational health/version/incident/lifecycle/run-evidence/quality-evidence logic inside a domain, but must not hide dataset transformation or business-quality behavior.
