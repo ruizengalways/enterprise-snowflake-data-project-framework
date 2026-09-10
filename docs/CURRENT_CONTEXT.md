@@ -39,11 +39,26 @@ New dataset starters include explicit object/apply/replay/validation/task/regist
 
 Each domain owns its own `CONTROL` schema. Do not create one shared writable `PLATFORM_CONTROL` database across all domains.
 
-The control plane includes dataset/version identity, lifecycle, SLA policy, ingestion/pipeline/dbt run evidence, health, incidents, version validation and repair audit. Enterprise health dashboards may union stable read-only health views from each domain.
+The control plane includes dataset/version identity, lifecycle, SLA policy, ingestion/pipeline/dbt run evidence, health, incidents, version validation and repair audit.
 
 Logical dataset lifecycle is explicit: `ACTIVE`, `PAUSED`, `DECOMMISSIONED`.
 
 Control-plane upgrades remain explicit. Rerunning `init-project` creates newly introduced missing files without overwriting existing files or the domain-owned deploy manifest. `esf control-plan` reports repo/manifest gaps.
+
+## Enterprise health export
+
+Each domain evaluates its own health and exposes a stable read-only contract through:
+
+```text
+CONTROL.ENTERPRISE_HEALTH_EXPORT_V
+CONTROL.DOMAIN_HEALTH_SUMMARY_V
+```
+
+The export includes an explicit domain code and current domain database plus the already-evaluated lifecycle, stage status, SLA, latency, freshness, incident and overall-health fields. It does not recalculate or reinterpret domain health.
+
+A separate enterprise monitoring repository/database explicitly UNIONs the participating domain views. It owns cross-domain presentation only; it does not write to domain `CONTROL` schemas. Cross-domain grants remain platform-infrastructure concerns.
+
+Removing a domain means removing that domain's read branch/grant after the retention decision. Other domain control planes remain unchanged.
 
 ## Run evidence
 
@@ -107,6 +122,6 @@ These remain exploratory domain work. The Framework keeps skeletons/examples but
 
 ## Architectural guardrails
 
-Continue to reject deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, connector offset/checkpoint ownership, hidden active-version switching, automatic production repair execution, automatic SLA threshold inference, destructive one-click decommission and automatic business Mart/KPI/Semantic generation.
+Continue to reject deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, connector offset/checkpoint ownership, shared writable cross-domain control planes, hidden active-version switching, automatic production repair execution, automatic SLA threshold inference, destructive one-click decommission and automatic business Mart/KPI/Semantic generation.
 
 The control plane may centralize operational health/version/incident/lifecycle/run-evidence logic inside a domain, but must not hide dataset transformation behavior.
