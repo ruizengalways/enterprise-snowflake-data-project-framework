@@ -3,7 +3,8 @@ from __future__ import annotations
 import subprocess
 from typing import TYPE_CHECKING
 
-from .certification_project import add_scd2_candidate
+from .certification_project import add_scd1_dynamic_table_candidate, add_scd2_candidate
+from .pipeline_model import build_names
 from .versioning import generate_release_scripts
 
 if TYPE_CHECKING:
@@ -136,8 +137,6 @@ def certify_candidate_release(runtime: "SnowflakeCertificationRuntime") -> None:
     v2 = runtime.names("scd2_customer", "scd2", "v2")
     runtime.client.execute_sql(f"CALL {v2.replay_procedure}(NULL, NULL);")
 
-    # Data arriving after candidate Stream creation must be independently consumable by both
-    # active v1 and candidate v2 after the candidate historical bootstrap.
     runtime.insert_rows("scd2_customer", spec["events"]["candidate_catchup"])
     runtime.call_apply(v1)
     runtime.call_apply(v2)
@@ -190,6 +189,93 @@ def certify_candidate_release(runtime: "SnowflakeCertificationRuntime") -> None:
     runtime.report.pass_check("published_view_grants")
 
 
+def certify_dynamic_table(runtime: "SnowflakeCertificationRuntime") -> None:
+    dataset = "scd1_customer"
+    spec = runtime.dataset_spec(dataset)
+    runtime.project = add_scd1_dynamic_table_candidate(runtime.project, "v2")
+    output = runtime.run_migrate(runtime.project.project_git_sha)
+    migration = "silver_processing/cert_source/scd1_customer/versions/v2/001_dynamic_table.sql"
+    if f"APPLY {migration}" not in output:
+        runtime.fail("Dynamic Table candidate migration was not applied")
+
+    v1 = runtime.names(dataset, "scd1", "v1")
+    v2 = build_names(
+        source_id=runtime.project.source_id,
+        dataset_id=dataset,
+        pattern="scd1",
+        entity=dataset,
+        version="v2",
+        execution_model="dynamic_table",
+    )
+    assert v1.physical_relation and v1.published_relation and v2.dynamic_table
+    runtime.assert_scalar(f"SELECT VALUE AS ACTUAL FROM {v2.dynamic_table} WHERE ID='1'", "C")
+    runtime.assert_scalar(
+        "SELECT EXECUTION_MODEL AS ACTUAL FROM CONTROL.DATASET_VERSION "
+        "WHERE DATASET_ID='cert_source.scd1_customer' AND VERSION='v2'",
+        "dynamic_table",
+    )
+    runtime.assert_scalar(
+        "SELECT SILVER_STATUS AS ACTUAL FROM CONTROL.DYNAMIC_TABLE_REFRESH_STATUS_V "
+        "WHERE DATASET_ID='cert_source.scd1_customer' AND VERSION='v2'",
+        "SUCCESS",
+    )
+
+    # A new event after candidate creation must converge under both execution technologies.
+    runtime.insert_rows(dataset, spec["events"]["dynamic_catchup"])
+    runtime.call_apply(v1)
+    runtime.client.execute_sql(f"ALTER DYNAMIC TABLE {v2.dynamic_table} REFRESH;")
+    runtime.assert_scalar(f"SELECT VALUE AS ACTUAL FROM {v1.physical_relation} WHERE ID='1'", "DYNAMIC")
+    runtime.assert_scalar(f"SELECT VALUE AS ACTUAL FROM {v2.dynamic_table} WHERE ID='1'", "DYNAMIC")
+    runtime.assert_scalar(
+        "SELECT STATE AS ACTUAL FROM TABLE(INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY("
+        f"NAME=>'{v2.dynamic_table}', RESULT_LIMIT=>20)) WHERE REFRESH_TRIGGER='MANUAL' "
+        "QUALIFY ROW_NUMBER() OVER (ORDER BY COALESCE(REFRESH_END_TIME, REFRESH_START_TIME, DATA_TIMESTAMP) DESC)=1",
+        "SUCCEEDED",
+    )
+
+    candidate_root = runtime.project.root / "silver_processing" / "cert_source" / dataset / "versions" / "v2"
+    runtime.client.execute_file(candidate_root / "020_validate.sql")
+    runtime.client.execute_file(candidate_root / "025_compare.sql")
+    runtime.assert_scalar(
+        "SELECT COUNT_IF(STATUS='FAIL') AS ACTUAL FROM CONTROL.DQ_RESULT "
+        "WHERE DATASET_ID='cert_source.scd1_customer' AND VERSION='v2'",
+        0,
+    )
+
+    runtime.client.execute_sql(
+        f"GRANT SELECT ON VIEW {v1.published_relation} TO ROLE {runtime.cert_reader_role};"
+    )
+    runtime.assert_published_select_grant(v1.published_relation)
+    release = generate_release_scripts(
+        project_root=runtime.project.root,
+        source_id="cert_source",
+        dataset_id=dataset,
+        from_version="v1",
+        to_version="v2",
+    )
+    runtime.client.execute_file(release.destination / "activate.sql")
+    runtime.assert_scalar(f"SELECT VALUE AS ACTUAL FROM {v1.published_relation} WHERE ID='1'", "DYNAMIC")
+    runtime.assert_published_select_grant(v1.published_relation)
+    runtime.client.execute_sql("CALL CONTROL.REFRESH_DATASET_HEALTH();")
+    runtime.assert_scalar(
+        "SELECT ACTIVE_EXECUTION_MODEL AS ACTUAL FROM CONTROL.DATASET_OBSERVABILITY_V "
+        "WHERE DATASET_ID='cert_source.scd1_customer'",
+        "dynamic_table",
+    )
+    runtime.assert_scalar(
+        "SELECT SILVER_STATUS AS ACTUAL FROM CONTROL.DATASET_OBSERVABILITY_V "
+        "WHERE DATASET_ID='cert_source.scd1_customer'",
+        "SUCCESS",
+    )
+
+    runtime.client.execute_file(release.destination / "rollback.sql")
+    runtime.assert_scalar(f"SELECT VALUE AS ACTUAL FROM {v1.published_relation} WHERE ID='1'", "DYNAMIC")
+    runtime.assert_published_select_grant(v1.published_relation)
+    runtime.report.pass_check("dynamic_table")
+    runtime.report.pass_check("cross_execution_model_release")
+    runtime.report.pass_check("dynamic_table_observability")
+
+
 def certify_checksum_drift(runtime: "SnowflakeCertificationRuntime") -> None:
     migration = runtime.project.root / "silver_processing" / "cert_source" / "append_events" / "030_task.sql"
     original = migration.read_text(encoding="utf-8")
@@ -238,5 +324,6 @@ def run_all_scenarios(runtime: "SnowflakeCertificationRuntime") -> None:
     certify_full_refresh(runtime)
     certify_quality_evidence(runtime)
     certify_candidate_release(runtime)
+    certify_dynamic_table(runtime)
     certify_checksum_drift(runtime)
     certify_failed_migration(runtime)
