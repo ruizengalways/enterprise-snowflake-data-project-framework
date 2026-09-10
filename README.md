@@ -66,23 +66,29 @@ This avoids collisions when two sources in one domain both contain a `customer` 
 
 Each domain owns its own `CONTROL` schema. Do not put all domains into one shared writable control database.
 
-`esf init-project` creates committed control-plane source:
+A fresh project contains committed control-plane migrations through:
 
 ```text
-control_plane/
-├── README.md
-├── deploy_manifest.txt
-└── sql/
-    ├── 001_objects.sql
-    ├── 010_observability_views.sql
-    ├── 020_refresh_health.sql
-    ├── 030_sla_incident_lifecycle.sql
-    └── 040_health_task.sql
+001_objects.sql
+010_observability_views.sql
+020_refresh_health.sql
+030_sla_incident_lifecycle.sql
+040_health_task.sql
+050_dataset_lifecycle_status.sql
+060_run_evidence_api.sql
 ```
 
-The model includes `DATASET`, `DATASET_VERSION`, `SLA_POLICY`, run ledgers, `DATASET_HEALTH`, `INCIDENT`, `REPAIR_RUN` and `VERSION_VALIDATION`.
+The model includes `DATASET`, `DATASET_VERSION`, `SLA_POLICY`, `INGESTION_RUN`, `PIPELINE_RUN`, `DBT_RUN`, `DATASET_HEALTH`, `INCIDENT`, `REPAIR_RUN` and `VERSION_VALIDATION`.
 
-`030_sla_incident_lifecycle.sql` adds cadence-aware SLA evaluation and automatic incident lifecycle. `040_health_task.sql` creates a one-minute serverless health task. The task is created suspended and must be explicitly resumed after validation.
+Operational evidence follows one domain contract:
+
+```text
+source-specific ingestion -> CONTROL.INGESTION_RUN
+Silver apply procedure    -> CONTROL.PIPELINE_RUN
+dbt model result          -> CONTROL.DBT_RUN
+```
+
+The ingestion ledger API records evidence only; it does not replace connector runtimes or own offsets/checkpoints. New dbt projects include an `on-run-end` macro. Per-dataset Gold health is opt-in with `config.meta.esf_dataset_id` so cross-dataset business marts are not falsely assigned to one source dataset.
 
 Cross-domain health is read-only aggregation of each domain's stable health view. A domain can be maintained or decommissioned independently.
 
@@ -109,18 +115,13 @@ esf sla-sql customer freshness_v1 \
   --project-root .
 
 esf lifecycle-sql customer pause_incident_123 \
-  --source fleet_mssql \
-  --action pause \
-  --version v1 \
-  --project-root .
+  --source fleet_mssql --action pause --version v1 --project-root .
 
 esf lifecycle-sql customer decommission_2026q4 \
-  --source fleet_mssql \
-  --action decommission \
-  --project-root .
+  --source fleet_mssql --action decommission --project-root .
 
 esf repair-plan customer --source fleet_mssql --problem silver --project-root .
-esf repair-sql customer v2 --source fleet_mssql --from "2026-09-01 00:00:00" --project-root .
+esf repair-sql customer v2 --source fleet_mssql --project-root .
 esf release-sql customer --source fleet_mssql --from-version v1 --to-version v2 --project-root .
 
 esf validate --project-root .
@@ -139,11 +140,9 @@ EXISTS
 
 Once `silver_processing/<source>/<dataset>/` exists, normal scaffold commands change zero bytes inside it. A candidate version is a separate ownership unit under `versions/vN/`. Generated SLA/lifecycle/repair/release operation directories use the same rule.
 
-Project initialization is also append-only. A Framework upgrade may introduce a new control migration or runbook, but rerunning `init-project` never rewrites existing project files or the domain-owned `control_plane/deploy_manifest.txt`. Use `esf control-plan` to see which known control files are missing from the repo or deploy manifest.
+Project initialization is also append-only. A Framework upgrade may introduce a new control migration, macro, example or runbook, but rerunning `init-project` never rewrites existing project files or the domain-owned `control_plane/deploy_manifest.txt`. `esf control-plan` reports explicit upgrade gaps.
 
 ## New dataset implementation layout
-
-A new dataset starter contains explicit Snowflake source-code skeletons:
 
 ```text
 silver_processing/fleet_mssql/customer/
@@ -162,19 +161,23 @@ silver_processing/fleet_mssql/customer/
 └── deploy_manifest.fragment.txt
 ```
 
-`060_policy.sql` is a commented logical-dataset SLA starter. It deliberately contains no guessed threshold. Generated code is intended to be read and changed by domain engineers.
+Generated code is intended to be read and changed by domain engineers.
 
-## SCD2 and versioning
+## Standard Silver patterns
 
-The default SCD2 implementation keeps complete history in one physical history table. Current state is represented by `WHERE IS_ACTIVE = TRUE`. Each implementation version owns independent physical objects, Stream/Task where appropriate, apply/replay procedure and validation SQL. Consumers use stable published Silver views.
+The Framework scaffolds `append`, `full_refresh`, `scd1`, `scd2` and `custom`.
 
-Candidate flow:
+For standard patterns, the generated implementation owns its physical objects, apply procedure, replay procedure, validation and Task/readiness source where appropriate. Pattern reuse happens at scaffold time; there is no central metadata-driven SCD runtime.
+
+SCD2 keeps complete history in one physical history table. Current state is `WHERE IS_ACTIVE = TRUE`. Stable published Silver views hide V1/V2 implementation details.
+
+## Versioning and blue/green
 
 ```text
 v1 ACTIVE
   -> scaffold-version v2
   -> deploy candidate
-  -> replay/bootstrap
+  -> full bootstrap / replay
   -> catch up
   -> shadow
   -> validate + compare
@@ -184,23 +187,11 @@ v1 ACTIVE
 
 `release-sql` generates files only. It does not perform cutover.
 
-## SLA and health
+## SLA, health and incidents
 
-SLA belongs to the logical dataset, not to the source manifest and not to V1/V2 implementation metadata.
+SLA belongs to the logical dataset, not to the source manifest or implementation version. Supported cadence models are `CONTINUOUS`, `INTERVAL` and `SCHEDULED_DEADLINE`. Latency and freshness are separate metrics.
 
-Git stores reviewable policy-change SQL under `operations/sla/`; `CONTROL.SLA_POLICY` stores the currently effective policy. Supported cadence models are `CONTINUOUS`, `INTERVAL` and `SCHEDULED_DEADLINE`. Latency and freshness remain separate metrics.
-
-`CONTROL.SLA_EVALUATION_V` exposes current policy results. `CONTROL.EVALUATE_DOMAIN_HEALTH()` refreshes `DATASET_HEALTH` and manages automatic incidents for ingestion failure, Silver pipeline failure, dbt failure and SLA violations. Repeated evaluation updates one open incident per condition; recovery resolves it.
-
-## Dataset lifecycle
-
-`esf lifecycle-sql` generates explicit lifecycle SQL and never executes it.
-
-`pause` and `resume` require an explicit implementation version so the Framework never guesses which task is active. The generated script changes the relevant Task plus `CONTROL.DATASET.ENABLED` and refreshes health.
-
-`decommission` is deliberately a **soft decommission**. It suspends known version Tasks, disables the logical dataset and marks versions retired, while preserving Bronze/Silver data, published views and control-plane audit evidence. It does not generate executable `DROP` statements.
-
-Physical cleanup happens later in a separately reviewed retention/governance change. New projects include `docs/DOMAIN_DECOMMISSION.md` with the staged domain-level process, including consumer cutover, retention, infrastructure cleanup and repository archive/removal decisions.
+`CONTROL.EVALUATE_DOMAIN_HEALTH()` refreshes health and manages automatic ingestion/pipeline/dbt/SLA incidents. Logical dataset lifecycle is explicit: `ACTIVE`, `PAUSED`, `DECOMMISSIONED`.
 
 ## Repair
 
@@ -212,16 +203,32 @@ Silver wrong / Bronze correct -> candidate version + replay
 Bronze wrong                  -> repair ingestion, then replay downstream
 ```
 
-`repair-plan` is read-only. `repair-sql` generates explicit SCD2 candidate replay SQL under `operations/replay/`. Engineers review and run that SQL themselves. Replay, backfill and reset remain separate concepts.
+`repair-plan` is read-only. `repair-sql` generates reviewable candidate-only repair scripts for the four standard patterns:
+
+```text
+append       -> idempotent Bronze event replay
+scd1         -> ordered current-state rebuild/merge
+scd2         -> affected-key history rebuild
+full_refresh -> complete Bronze snapshot rebuild
+custom       -> domain-authored repair
+```
+
+A newly created candidate should normally receive a full bootstrap with no `--from`/`--to`. Bounded replay assumes a known-correct candidate baseline outside the requested window. Full-refresh deliberately rejects time ranges.
+
+Active production is not overwritten by generated repair scripts. Release SQL remains a separate explicit step after validation.
+
+## Dataset/domain lifecycle
+
+`esf lifecycle-sql` generates pause/resume/soft-decommission SQL and never executes it. Soft decommission preserves Bronze/Silver data, published views and audit evidence. Physical cleanup happens later in a separately approved retention/governance change. New projects include `docs/DOMAIN_DECOMMISSION.md`.
 
 ## dbt and deployment
 
-Silver processing and dbt remain in the same domain repo so one Git SHA identifies one domain release. dbt starts from trusted Silver. The framework keeps Mart/KPI/Semantic as exploratory domain work; it provides skeletons/examples rather than auto-generating business logic.
+Silver processing and dbt remain in the same domain repo so one Git SHA identifies one domain release. dbt starts from trusted Silver. Mart/KPI/Semantic remain exploratory domain work; the Framework provides skeletons/examples rather than automatic business logic generation.
 
 The reusable deployment workflow executes committed control-plane SQL first, then committed Silver SQL, then dbt. Scaffolding never occurs during deployment.
 
 ## Deliberately absent
 
-The toolkit does not contain a universal source-discovery engine, universal ingestion orchestrator, central generic SCD runtime engine, runtime metadata routing, metadata-to-runtime transformation SQL generation, deployment-time scaffolding, automatic SLA inference, one-click destructive decommission, automatic business Mart/KPI/Semantic generation, or connector-state engines for mature connectors that already own their checkpoint state.
+The toolkit does not contain a universal source-discovery engine, universal ingestion orchestrator, central generic SCD runtime engine, runtime metadata routing, metadata-to-runtime transformation SQL generation, deployment-time scaffolding, connector offset/checkpoint ownership, automatic SLA inference, one-click destructive decommission, or automatic business Mart/KPI/Semantic generation.
 
 Live Snowflake/WIF acceptance remains a separate integration gate until a configured DEV Snowflake environment is available.

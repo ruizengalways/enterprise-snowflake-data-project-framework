@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .pipeline_model import column_names
 from .pipeline_sql import build_names
 from .scaffold import _load_raw_contract
 from .source_management import load_source_manifest
 from .versioning import next_version, validate_version
 
 PROBLEM_LAYERS = {"ingestion", "silver", "gold"}
+STANDARD_REPAIR_PATTERNS = {"append", "full_refresh", "scd1", "scd2"}
 
 
 @dataclass(frozen=True)
@@ -125,16 +127,18 @@ def build_repair_plan(
     notes = [
         "Confirm Bronze retains the evidence needed for replay.",
         f"Create candidate {candidate} and keep the current active version serving production.",
-        "Bootstrap/replay the candidate from Bronze for the affected range.",
+        "For a new empty candidate, prefer a full bootstrap with no --from/--to bounds.",
+        "Use a bounded replay only when the candidate already has a correct baseline outside the requested range.",
         "Catch up the candidate, then run shadow validation and active-vs-candidate reconciliation.",
         "Generate explicit release SQL only after validation passes.",
         "Rebuild affected dbt descendants after activation.",
     ]
-    if pattern != "scd2":
-        notes.insert(
-            1,
-            f"Pattern is {pattern}; replay semantics may be source-specific and should be reviewed before execution.",
-        )
+    if pattern == "full_refresh":
+        notes[2] = "Full-refresh repair rebuilds the candidate from the current complete Bronze snapshot; time-range replay is not meaningful."
+        notes.pop(3)
+    elif pattern == "custom":
+        notes[2] = "CUSTOM repair remains domain-authored; document replay evidence and invariants before writing recovery SQL."
+        notes.pop(3)
     return RepairPlan(
         source_id=source_id,
         dataset_id=dataset_id,
@@ -156,6 +160,28 @@ def _sql_timestamp(value: str | None) -> str:
     return f"TO_TIMESTAMP_NTZ('{escaped}')"
 
 
+def _has_replay_timestamp(contract: dict) -> bool:
+    return bool(contract.get("source_timestamp")) or "INGESTED_AT" in column_names(contract)
+
+
+def _validate_bounded_replay(pattern: str, contract: dict, requested_from: str | None, requested_to: str | None) -> None:
+    bounded = requested_from is not None or requested_to is not None
+    if not bounded:
+        return
+    if pattern == "full_refresh":
+        raise ValueError("full_refresh repair rebuilds the current Bronze snapshot and does not accept --from/--to")
+    if pattern in {"append", "scd1"} and not _has_replay_timestamp(contract):
+        raise ValueError(
+            f"{pattern} ranged repair requires RAW source_timestamp or INGESTED_AT; use a full bootstrap instead"
+        )
+    if pattern == "scd1":
+        delete_semantics = str(contract.get("change_semantics", {}).get("delete_semantics", "none"))
+        if delete_semantics not in {"none", "tombstone"}:
+            raise ValueError(
+                "bounded scd1 repair requires delete_semantics none/tombstone so deleted keys remain discoverable; use a full bootstrap instead"
+            )
+
+
 def generate_silver_repair_scripts(
     *,
     project_root: Path,
@@ -172,11 +198,17 @@ def generate_silver_repair_scripts(
         raise ValueError("repair SQL must target a candidate version v2 or later")
     config = _dataset_config(project_root, source_id, dataset_id)
     pattern = str(config.get("pattern"))
-    if pattern != "scd2":
-        raise ValueError("first repair SQL generator supports SCD2 only; other patterns remain domain-authored")
+    if pattern == "custom":
+        raise ValueError("CUSTOM repair remains domain-authored; repair-sql only supports standard patterns")
+    if pattern not in STANDARD_REPAIR_PATTERNS:
+        raise ValueError(f"unsupported repair pattern: {pattern}")
+
     raw_contract = config.get("raw_contract")
     if not isinstance(raw_contract, str):
         raise ValueError(f"raw_contract is required for {source_id}.{dataset_id}")
+    contract = _load_raw_contract(project_root, raw_contract, source_id)
+    _validate_bounded_replay(pattern, contract, requested_from, requested_to)
+
     implementation = (
         project_root
         / "silver_processing"
@@ -190,7 +222,6 @@ def generate_silver_repair_scripts(
         raise FileNotFoundError(
             f"candidate implementation not found; run scaffold-version first: {implementation}"
         )
-    contract = _load_raw_contract(project_root, raw_contract, source_id)
     names = build_names(
         source_id=source_id,
         dataset_id=dataset_id,
@@ -210,31 +241,48 @@ def generate_silver_repair_scripts(
             files=(),
         )
     destination.mkdir(parents=True, exist_ok=False)
-    sql = f"""-- Engineer-reviewed Silver repair. `esf` never executes this file.
+
+    if pattern == "full_refresh":
+        replay_call = f"CALL {names.replay_procedure}();"
+        range_note = "This pattern rebuilds from the current complete Bronze snapshot; no time range is applied."
+    else:
+        replay_call = f"""CALL {names.replay_procedure}(
+    {_sql_timestamp(requested_from)},
+    {_sql_timestamp(requested_to)}
+);"""
+        range_note = (
+            "No bounds were supplied: this is a full candidate bootstrap from retained Bronze evidence."
+            if requested_from is None and requested_to is None
+            else "A bounded replay assumes this candidate already has a correct baseline outside the requested range."
+        )
+
+    sql = f"""-- Engineer-reviewed Silver repair for pattern {pattern}. `esf` never executes this file.
 -- Active production remains untouched; this rebuilds candidate {candidate_version} only.
+-- {range_note}
 
 ALTER TASK {names.task} SUSPEND;
 
-CALL {names.replay_procedure}(
-    {_sql_timestamp(requested_from)},
-    {_sql_timestamp(requested_to)}
-);
+{replay_call}
 
 -- Review candidate validation before catch-up/activation:
 -- silver_processing/{source_id}/{dataset_id}/versions/{candidate_version}/020_validate.sql
--- Then catch up the candidate stream with CALL {names.apply_procedure}(); or resume its task.
+-- Then catch up new changes with CALL {names.apply_procedure}(); or resume its task when configured.
 -- Generate activate/rollback SQL separately with `esf release-sql` only after validation.
 """
     readme = f"""# Silver repair: {source_id}.{dataset_id} {candidate_version}
 
+Pattern: `{pattern}`
+
 This directory is generated for review, not automatic execution.
 
-1. Confirm Bronze is the known-good layer and retained evidence covers the requested range.
+1. Confirm Bronze is the known-good layer and retains the evidence required by this pattern.
 2. Deploy the candidate implementation.
-3. Review and run `repair.sql`.
+3. Review and run `repair.sql` against the candidate only.
 4. Run candidate validation and active-vs-candidate reconciliation.
-5. Catch up new events.
+5. Catch up new events or the next snapshot as appropriate.
 6. Generate release SQL only when the candidate is approved.
+
+{range_note}
 """
     files = {"README.md": readme, "repair.sql": sql}
     paths: list[Path] = []

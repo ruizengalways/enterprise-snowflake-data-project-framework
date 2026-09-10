@@ -5,47 +5,35 @@
 Repair starts from the most recent layer known to be correct.
 
 ```text
-Source
-  -> Bronze
-  -> Silver
-  -> Gold/dbt
+Source -> Bronze -> Silver -> Gold/dbt
 ```
 
-The framework helps engineers diagnose impact and generate explicit repair SQL/scripts. It does not autonomously execute production repair.
+The framework helps engineers diagnose impact and generate explicit candidate repair SQL/scripts. It does not autonomously execute production repair.
 
 ## Failure classification
 
 ### Ingestion failure
 
-If Bronze is incomplete or wrong, repair Source -> Bronze first using the technology that owns ingestion.
+If Bronze is incomplete or wrong, repair Source -> Bronze first using the technology that owns ingestion: Openflow, Snowpipe, Kafka, API code, Talend/ADF/Informatica, or another domain-specific implementation. The Framework does not emulate connector recovery or own connector checkpoints.
 
-Examples:
-
-- Openflow: connector recovery/backfill
-- Snowpipe: stage/pipe/COPY repair
-- Kafka: connector replay/offset controls
-- API: cursor/watermark replay when domain-owned
-- Talend/ADF/Informatica: rerun in the external orchestrator
-
-The framework does not emulate these connectors. After Bronze is corrected, replay affected Silver and rebuild affected downstream dbt models.
+After Bronze is correct, replay the affected Silver candidate and rebuild affected downstream dbt models.
 
 ### Silver failure
 
-If Bronze is correct and Silver logic is wrong, prefer a new candidate version rather than ad-hoc mutation of the active history table.
+If Bronze is correct and Silver logic is wrong, prefer a new candidate version rather than ad-hoc mutation of active production.
 
 ```text
 fix code
   -> scaffold-version vN
   -> deploy candidate
-  -> replay Bronze
+  -> bootstrap/replay Bronze
   -> catch up
-  -> validate
-  -> compare
+  -> validate + compare
   -> release-sql
   -> explicit activation
 ```
 
-The active version remains available while the repair candidate is built.
+The active version remains available throughout repair.
 
 ### Gold/dbt failure
 
@@ -53,91 +41,101 @@ If Silver is correct, fix dbt code and rebuild only the affected model graph fro
 
 ## Replay, backfill and reset
 
-### Replay
+**Replay** means required data already exists correctly in Bronze and Bronze -> Silver must be recomputed.
 
-Data already exists correctly in Bronze. Reprocess Bronze -> Silver, usually after a transformation fix or candidate rebuild.
+**Backfill** means required historical data never entered the platform. Recover Source -> Bronze first, then process downstream.
 
-### Backfill
-
-Required historical data never entered the platform. Recover Source -> Bronze, then process downstream layers.
-
-### Reset
-
-Discard/recreate a development or candidate implementation so it can be bootstrapped again. Reset is not a default production repair mechanism.
+**Reset** means discard/recreate a development or candidate implementation so it can be bootstrapped again. Reset is not the default production repair mechanism.
 
 ## Bronze retention
 
-Replayability depends on Bronze retaining sufficient evidence. CDC/event pipelines should preserve source changes and ordering evidence for the required recovery window. If ingestion only captures current snapshots, intermediate history that never reached Bronze cannot be reconstructed by an SCD2 procedure.
+Replayability depends on Bronze retaining sufficient evidence. CDC/event pipelines should preserve source changes and ordering evidence for the required recovery window. If Bronze only contains a current snapshot, intermediate history that never reached Bronze cannot later be reconstructed as SCD2 history.
+
+## Standard pattern repair semantics
+
+The Framework standardizes four repair shapes at scaffold time. They are separate dataset-local procedures, not calls into one generic runtime engine.
+
+### Append
+
+`REPLAY_<dataset>_<version>(P_FROM, P_TO)` reads retained Bronze events and inserts only idempotency keys not already present in the candidate. With NULL bounds it is a full idempotent bootstrap.
+
+### SCD1
+
+`REPLAY_<dataset>_<version>(P_FROM, P_TO)` selects the latest ordered Bronze row per business key and merges it into the candidate current-state table. Tombstones declared by the RAW contract delete the candidate key.
+
+### SCD2
+
+The candidate keeps a version-local retained event ledger. Replay deduplicates Bronze evidence, identifies affected business keys and deterministically rebuilds history for those keys. Current state remains `IS_ACTIVE = TRUE`.
+
+### Full refresh
+
+`REPLAY_<dataset>_<version>()` rebuilds the candidate from the current complete Bronze snapshot using `INSERT OVERWRITE`. Time-range replay is deliberately unsupported because a full-refresh source has snapshot semantics.
+
+### Custom
+
+CUSTOM replay remains domain-authored. The Framework does not infer its recovery algorithm.
+
+## Full bootstrap vs bounded replay
+
+A newly created empty candidate should normally be bootstrapped with **no `--from` / `--to` bounds** so it contains the complete retained state/evidence required for activation.
+
+A bounded replay is appropriate only when the candidate already has a known-correct baseline outside the requested range. `repair-plan`, generated SQL and generated README files state this explicitly.
 
 ## REPAIR_RUN
 
-Every executed repair should be auditable regardless of the technology that performs it. The domain-local `CONTROL.REPAIR_RUN` table records repair identity, dataset, type, range, status, operator, Git commit/external run evidence, row counts and errors.
+Every standard replay procedure writes the domain-local `CONTROL.REPAIR_RUN` ledger with repair identity, dataset, requested range where applicable, status, operator, recovered row count and error evidence.
+
+Repair completion and incident resolution remain separate facts. A repair may succeed while freshness, DQ or reconciliation still fails.
 
 ## `esf repair-plan`
 
-Implemented as a read-only command:
+`repair-plan` is read-only:
 
 ```bash
 esf repair-plan customer \
   --source fleet_mssql \
-  --problem silver \
-  --from "2026-09-01 00:00:00"
+  --problem silver
 ```
 
-It identifies:
-
-- problem layer
-- known-good layer
-- recommended action
-- recommended next candidate version for Silver failures
-- requested range
-- whether active production will be overwritten (default `NO`)
-- validation/catch-up/downstream checks
-
-It writes zero files and executes zero Snowflake SQL.
+It identifies the problem layer, latest known-good layer, recommended candidate version, replay/bootstrap expectation and validation/release checks. It writes zero files and executes zero Snowflake SQL.
 
 ## `esf repair-sql`
 
-The first executable aid supports SCD2 candidate replay:
+For standard patterns:
+
+```bash
+esf repair-sql customer v2 --source fleet_mssql
+```
+
+or, when a candidate baseline already exists and the pattern supports ranges:
 
 ```bash
 esf repair-sql customer v2 \
   --source fleet_mssql \
-  --from "2026-09-01 00:00:00"
+  --from "2026-09-01 00:00:00" \
+  --to   "2026-09-02 00:00:00"
 ```
 
-It creates an ownership unit under:
+It creates:
 
 ```text
-operations/replay/fleet_mssql/customer/v2/
+operations/replay/<source>/<dataset>/<version>/
 ├── README.md
 └── repair.sql
 ```
 
-If that directory already exists, the framework changes zero bytes.
+If that ownership unit already exists, the Framework changes zero bytes.
 
-The generated SQL:
+Generated repair SQL:
 
 1. suspends only the candidate task;
-2. calls the candidate-local replay procedure for the requested range;
-3. leaves the active physical/published implementation untouched;
-4. points engineers to candidate validation and catch-up;
-5. requires release SQL to be generated separately after validation.
+2. calls the candidate-local replay procedure using pattern-appropriate arguments;
+3. leaves active production and stable published objects untouched;
+4. points engineers to candidate validation/catch-up;
+5. requires separate `release-sql` after approval.
 
-The replay procedure writes `CONTROL.REPAIR_RUN` evidence itself.
-
-Other patterns remain domain-authored until their replay semantics are sufficiently stable to standardize safely.
-
-## Candidate replay implementation
-
-The generated SCD2 candidate keeps a version-local retained event ledger. Replay reads the Bronze evidence declared by the RAW contract, deduplicates with the idempotency key, identifies affected business keys and deterministically rebuilds only those keys in the candidate history table.
-
-The online apply procedure and replay procedure use the same visible algorithmic ideas but are committed dataset-local SQL rather than calls into a central runtime SCD engine.
+`full_refresh` rejects `--from`/`--to`. `custom` rejects `repair-sql` and remains domain-authored.
 
 ## Downstream rebuild
 
-After a Silver repair is activated, rebuild only affected dbt descendants where practical. The framework does not automatically rerun the entire domain.
-
-## Incident closure
-
-Repair completion and incident resolution are separate facts. A repair may succeed while freshness, DQ or reconciliation checks still fail. Resolve the incident only after the affected health conditions recover.
+After a Silver repair is activated, rebuild only affected dbt descendants where practical. The Framework does not automatically rerun the whole domain.
