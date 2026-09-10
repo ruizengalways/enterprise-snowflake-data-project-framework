@@ -114,15 +114,15 @@ jobs:
       - name: Validate project contracts before authentication
         run: esf validate --project-root project
 
+      - name: Require current control-plane baseline before authentication
+        run: esf-control-preflight --project-root project
+
       - name: Validate committed domain control-plane deployment manifest
         shell: bash
         run: |
           set -euo pipefail
           manifest="project/control_plane/deploy_manifest.txt"
-          if [[ ! -f "${manifest}" ]]; then
-            echo "No domain control-plane manifest found; skipping control-plane deployment for this project revision."
-            exit 0
-          fi
+          test -f "${manifest}"
           count=0
           while IFS= read -r raw || [[ -n "${raw}" ]]; do
             path="${raw%%#*}"
@@ -197,10 +197,6 @@ jobs:
         run: |
           set -euo pipefail
           manifest="project/control_plane/deploy_manifest.txt"
-          if [[ ! -f "${manifest}" ]]; then
-            echo "No domain control-plane manifest found; skipping."
-            exit 0
-          fi
           while IFS= read -r raw || [[ -n "${raw}" ]]; do
             path="${raw%%#*}"
             path="$(printf '%s' "${path}" | xargs)"

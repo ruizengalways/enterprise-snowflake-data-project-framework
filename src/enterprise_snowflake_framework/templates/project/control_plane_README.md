@@ -43,6 +43,28 @@ The control plane provides:
 
 The quality-incident task is created suspended. Resume it explicitly only after migration review. Existing health tasks are not replaced by migration 080.
 
+## Upgrade and deployment gate
+
+Rerunning `esf init-project` may create a newly introduced missing control migration, but it never edits this domain-owned `deploy_manifest.txt`.
+
+Use:
+
+```bash
+esf control-plan --project-root .
+```
+
+for the human-readable upgrade report. Review and explicitly add any required migration to the manifest in Framework order.
+
+The reusable deployment workflow additionally runs:
+
+```bash
+esf-control-preflight --project-root .
+```
+
+before Snowflake authentication. Deployment is blocked when a Framework-known migration is missing from the repo/manifest, duplicated, or out of Framework order. Domain-owned extra control migrations remain allowed; the normal manifest path/file checks still apply to them.
+
+This gate never rewrites the manifest. See `docs/architecture/DEPLOYMENT_CONTROL_PREFLIGHT.md` in the Framework repository for the contract.
+
 Enterprise monitoring may UNION the stable export views across domains, but must not write back into domain control schemas. Cross-domain roles/grants belong in platform infrastructure.
 
 The control plane records operational state and evidence. It does not dynamically route SCD patterns, generate transformation SQL at runtime, infer business DQ rules, or decide reconciliation logic.

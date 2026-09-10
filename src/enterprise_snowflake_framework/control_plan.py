@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,9 +25,13 @@ class ControlPlan:
     manifest_entries: tuple[str, ...]
     missing_from_manifest: tuple[str, ...]
     unknown_manifest_entries: tuple[str, ...]
+    duplicate_manifest_entries: tuple[str, ...]
+    known_manifest_entries: tuple[str, ...]
+    known_order_valid: bool
 
     @property
     def ready(self) -> bool:
+        """Preserve the original control-plan meaning: all known upgrade files are present and listed."""
         return not self.known_files_missing and not self.missing_from_manifest
 
 
@@ -41,6 +46,12 @@ def _manifest_entries(path: Path) -> tuple[str, ...]:
     return tuple(entries)
 
 
+def _known_order_is_valid(entries: tuple[str, ...]) -> bool:
+    known_entries = tuple(path for path in entries if path in KNOWN_CONTROL_SQL)
+    expected = tuple(path for path in KNOWN_CONTROL_SQL if path in known_entries)
+    return known_entries == expected
+
+
 def build_control_plan(project_root: Path) -> ControlPlan:
     project_root = project_root.resolve()
     manifest = project_root / "control_plane" / "deploy_manifest.txt"
@@ -49,6 +60,9 @@ def build_control_plan(project_root: Path) -> ControlPlan:
     missing = tuple(path for path in KNOWN_CONTROL_SQL if not (project_root / path).is_file())
     missing_manifest = tuple(path for path in present if path not in entries)
     unknown = tuple(path for path in entries if path not in KNOWN_CONTROL_SQL)
+    counts = Counter(entries)
+    duplicates = tuple(dict.fromkeys(path for path in entries if counts[path] > 1))
+    known_entries = tuple(path for path in entries if path in KNOWN_CONTROL_SQL)
     return ControlPlan(
         manifest=manifest,
         known_files_present=present,
@@ -56,4 +70,7 @@ def build_control_plan(project_root: Path) -> ControlPlan:
         manifest_entries=entries,
         missing_from_manifest=missing_manifest,
         unknown_manifest_entries=unknown,
+        duplicate_manifest_entries=duplicates,
+        known_manifest_entries=known_entries,
+        known_order_valid=_known_order_is_valid(entries),
     )
