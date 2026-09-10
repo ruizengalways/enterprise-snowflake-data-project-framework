@@ -35,7 +35,9 @@ A domain is a repository and a Snowflake database boundary. Run `esf init-projec
 ```text
 enterprise-snowflake-transport-analytics/
 ├── config/sources/
-├── contracts/raw/
+├── contracts/
+│   ├── drafts/
+│   └── raw/
 ├── ingestion/
 ├── silver_processing/
 ├── control_plane/
@@ -61,6 +63,49 @@ SILVER.FLEET_MSSQL_CUSTOMER_CURRENT
 ```
 
 This avoids collisions when two sources in one domain both contain a `customer` dataset. Existing domain-owned pipelines are never renamed automatically.
+
+## RAW contract authoring gate
+
+RAW contracts are reviewed engineering declarations, not discovery output. The Framework does not infer business keys, timestamps, ordering, CDC/delete semantics, capture fidelity or SCD pattern.
+
+Incomplete work stays outside the production contract boundary:
+
+```text
+contracts/drafts/<source>/<dataset>.yml
+```
+
+Only finalized contracts live under:
+
+```text
+contracts/raw/<source>/<dataset>.yml
+```
+
+Typical flow:
+
+```bash
+esf add-source fleet_mssql --project-root .
+
+esf raw-contract-draft customer \
+  --source fleet_mssql \
+  --project-root .
+
+# Edit contracts/drafts/fleet_mssql/customer.yml and resolve every TODO.
+
+esf raw-contract-finalize customer \
+  --source fleet_mssql \
+  --project-root .
+
+esf add-dataset customer \
+  --source fleet_mssql \
+  --pattern scd2 \
+  --project-root .
+
+esf plan --source fleet_mssql --project-root .
+esf scaffold-preview customer --source fleet_mssql --project-root .
+esf scaffold scd2 customer --source fleet_mssql --project-root .
+```
+
+`raw-contract-draft` creates a draft once and never overwrites it. `raw-contract-finalize` refuses unresolved TODO values, runs the canonical RAW schema/semantic validation, then moves the exact reviewed bytes into `contracts/raw/`. It does not add the dataset to the source manifest and never overwrites an existing formal contract. See `docs/architecture/RAW_CONTRACT_AUTHORING.md`.
 
 ## Domain-local control plane
 
@@ -101,18 +146,13 @@ python -m pip install .
 esf init-project --project-root .
 esf control-plan --project-root .
 esf add-source fleet_mssql --project-root .
-
-# after reviewing contracts/raw/fleet_mssql/customer.yml
-esf add-dataset customer \
-  --source fleet_mssql \
-  --pattern scd2 \
-  --project-root .
-
+esf raw-contract-draft customer --source fleet_mssql --project-root .
+esf raw-contract-finalize customer --source fleet_mssql --project-root .
+esf add-dataset customer --source fleet_mssql --pattern scd2 --project-root .
 esf plan --source fleet_mssql --project-root .
 esf scaffold-preview customer --source fleet_mssql --project-root .
 esf scaffold scd2 customer --source fleet_mssql --project-root .
 esf scaffold-all --source fleet_mssql --project-root .
-
 esf scaffold-version customer v2 --source fleet_mssql --project-root .
 
 esf sla-sql customer freshness_v1 \
@@ -131,7 +171,6 @@ esf lifecycle-sql customer decommission_2026q4 \
 esf repair-plan customer --source fleet_mssql --problem silver --project-root .
 esf repair-sql customer v2 --source fleet_mssql --project-root .
 esf release-sql customer --source fleet_mssql --from-version v1 --to-version v2 --project-root .
-
 esf validate --project-root .
 ```
 
@@ -148,7 +187,7 @@ EXISTS
     -> DOMAIN OWNED FOREVER
 ```
 
-Once a source-manifest dataset declaration exists, `add-dataset` never changes it. Once `silver_processing/<source>/<dataset>/` exists, normal scaffold commands change zero bytes inside it. A candidate version is a separate ownership unit under `versions/vN/`. Generated SLA/lifecycle/repair/release operation directories use the same rule.
+A RAW draft is created once. A finalized RAW contract is never overwritten by finalization. Once a source-manifest dataset declaration exists, `add-dataset` never changes it. Once `silver_processing/<source>/<dataset>/` exists, normal scaffold commands change zero bytes inside it. A candidate version is a separate ownership unit under `versions/vN/`. Generated SLA/lifecycle/repair/release operation directories use the same rule.
 
 Project initialization is also append-only. A Framework upgrade may introduce a new control migration, macro, example or runbook, but rerunning `init-project` never rewrites existing project files or the domain-owned `control_plane/deploy_manifest.txt`. `esf control-plan` reports explicit upgrade gaps.
 
@@ -239,6 +278,6 @@ The reusable deployment workflow executes committed control-plane SQL first, the
 
 ## Deliberately absent
 
-The toolkit does not contain a universal source-discovery engine, universal ingestion orchestrator, central generic SCD runtime engine, runtime metadata routing, metadata-to-runtime transformation SQL generation, deployment-time scaffolding, connector offset/checkpoint ownership, automatic SLA inference, one-click destructive decommission, or automatic business Mart/KPI/Semantic generation.
+The toolkit does not contain a universal source-discovery engine, universal source-profiling engine, universal ingestion orchestrator, central generic SCD runtime engine, runtime metadata routing, metadata-to-runtime transformation SQL generation, deployment-time scaffolding, connector offset/checkpoint ownership, automatic business-key/SCD inference, automatic SLA inference, one-click destructive decommission, or automatic business Mart/KPI/Semantic generation.
 
 Live Snowflake/WIF acceptance remains a separate integration gate until a configured DEV Snowflake environment is available.
