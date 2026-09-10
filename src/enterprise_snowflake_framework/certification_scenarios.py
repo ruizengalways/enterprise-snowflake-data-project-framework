@@ -126,6 +126,7 @@ def certify_quality_evidence(runtime: "SnowflakeCertificationRuntime") -> None:
 
 
 def certify_candidate_release(runtime: "SnowflakeCertificationRuntime") -> None:
+    spec = runtime.dataset_spec("scd2_customer")
     runtime.project = add_scd2_candidate(runtime.project, "v2")
     output = runtime.run_migrate(runtime.project.project_git_sha)
     if "APPLY silver_processing/cert_source/scd2_customer/versions/v2/001_objects.sql" not in output:
@@ -134,6 +135,15 @@ def certify_candidate_release(runtime: "SnowflakeCertificationRuntime") -> None:
     v1 = runtime.names("scd2_customer", "scd2", "v1")
     v2 = runtime.names("scd2_customer", "scd2", "v2")
     runtime.client.execute_sql(f"CALL {v2.replay_procedure}(NULL, NULL);")
+
+    # Data arriving after candidate Stream creation must be independently consumable by both
+    # active v1 and candidate v2 after the candidate historical bootstrap.
+    runtime.insert_rows("scd2_customer", spec["events"]["candidate_catchup"])
+    runtime.call_apply(v1)
+    runtime.call_apply(v2)
+    runtime.assert_scalar(f"SELECT VALUE AS ACTUAL FROM {v2.current_relation} WHERE ID='2'", "F")
+    runtime.report.pass_check("candidate_v2_catch_up")
+
     runtime.call_validate(v2)
     compare = runtime.project.root / "silver_processing" / "cert_source" / "scd2_customer" / "versions" / "v2" / "025_compare.sql"
     runtime.client.execute_file(compare)
@@ -152,7 +162,9 @@ def certify_candidate_release(runtime: "SnowflakeCertificationRuntime") -> None:
     runtime.client.execute_sql(
         f"UPDATE {v2.history_relation} SET VALUE='candidate_release_marker' WHERE ID='1' AND IS_ACTIVE=TRUE;"
     )
-    runtime.client.execute_sql(f"GRANT SELECT ON VIEW {v1.published_current} TO ROLE {runtime.cert_role};")
+    runtime.client.execute_sql(
+        f"GRANT SELECT ON VIEW {v1.published_current} TO ROLE {runtime.cert_reader_role};"
+    )
     runtime.assert_published_select_grant(v1.published_current)
 
     release = generate_release_scripts(
