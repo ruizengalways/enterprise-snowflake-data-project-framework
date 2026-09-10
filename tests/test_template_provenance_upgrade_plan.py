@@ -119,7 +119,7 @@ class TemplateProvenanceUpgradePlanTests(unittest.TestCase):
         provenance = v1_doc["version"]["provenance"]
         self.assertEqual(FRAMEWORK_VERSION, provenance["framework_version"])
         self.assertEqual("scd2_stream_task", provenance["template_id"])
-        self.assertEqual(3, provenance["template_revision"])
+        self.assertEqual(4, provenance["template_revision"])
         self.assertRegex(provenance["template_digest"], r"^sha256:[0-9a-f]{64}$")
 
         v2 = scaffold_version(
@@ -132,9 +132,9 @@ class TemplateProvenanceUpgradePlanTests(unittest.TestCase):
         self.assertEqual(provenance, v2_doc["version"]["provenance"])
         self.assertFalse(validate_project_tree(self.root))
 
-    def test_only_affected_stream_task_templates_advance_to_revision_three(self) -> None:
+    def test_only_scd2_advances_in_027(self) -> None:
         self.assertEqual(3, current_template_provenance("append", "stream_task").template_revision)
-        self.assertEqual(3, current_template_provenance("scd2", "stream_task").template_revision)
+        self.assertEqual(4, current_template_provenance("scd2", "stream_task").template_revision)
         self.assertEqual(2, current_template_provenance("scd1", "stream_task").template_revision)
         self.assertEqual(2, current_template_provenance("full_refresh", "stream_task").template_revision)
         self.assertEqual(1, current_template_provenance("full_refresh", "dynamic_table").template_revision)
@@ -157,7 +157,7 @@ class TemplateProvenanceUpgradePlanTests(unittest.TestCase):
         after = self._snapshot()
         self.assertEqual(before, after)
         self.assertEqual("UPDATE_AVAILABLE", entry.status)
-        self.assertEqual(3, entry.current_revision)
+        self.assertEqual(4, entry.current_revision)
         self.assertEqual(1, entry.provenance.template_revision)
 
     def test_revision_two_scd2_is_update_available_without_rewrite(self) -> None:
@@ -178,8 +178,29 @@ class TemplateProvenanceUpgradePlanTests(unittest.TestCase):
         after = self._snapshot()
         self.assertEqual(before, after)
         self.assertEqual("UPDATE_AVAILABLE", entry.status)
-        self.assertEqual(3, entry.current_revision)
+        self.assertEqual(4, entry.current_revision)
         self.assertEqual(2, entry.provenance.template_revision)
+
+    def test_revision_three_scd2_is_update_available_without_rewrite(self) -> None:
+        v1 = self._scaffold()
+        version_file = v1 / "version.yml"
+        document = yaml.safe_load(version_file.read_text(encoding="utf-8"))
+        revision_three = _TEMPLATE_HISTORY["scd2_stream_task"][3]
+        document["version"]["provenance"] = {
+            "framework_version": "0.26.0",
+            "template_id": "scd2_stream_task",
+            "template_revision": 3,
+            "template_digest": revision_three.digest,
+        }
+        version_file.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+
+        before = self._snapshot()
+        entry = build_upgrade_plan(self.root).entries[0]
+        after = self._snapshot()
+        self.assertEqual(before, after)
+        self.assertEqual("UPDATE_AVAILABLE", entry.status)
+        self.assertEqual(4, entry.current_revision)
+        self.assertEqual(3, entry.provenance.template_revision)
 
     def test_legacy_version_without_provenance_is_unknown_and_never_inferred_from_sql(self) -> None:
         v1 = self._scaffold()
@@ -220,7 +241,7 @@ class TemplateProvenanceUpgradePlanTests(unittest.TestCase):
             advisory_id="ESF-TEST-001",
             severity="HIGH",
             template_id="scd2_stream_task",
-            affected_max_revision=3,
+            affected_max_revision=4,
             issue="fixture issue for advisory matching",
             recommendation="create a new candidate with the current template and compare evidence",
         )
