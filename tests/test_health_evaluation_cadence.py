@@ -40,8 +40,10 @@ class HealthEvaluationCadenceTests(unittest.TestCase):
         self.assertNotIn("ALTER TASK", "\n".join(
             line for line in sql130.splitlines() if not line.lstrip().startswith("--")
         ))
-        self.assertEqual(
-            "control_plane/sql/130_health_evaluation_cadence.sql", KNOWN_CONTROL_SQL[-1]
+        self.assertIn("control_plane/sql/130_health_evaluation_cadence.sql", KNOWN_CONTROL_SQL)
+        self.assertLess(
+            KNOWN_CONTROL_SQL.index("control_plane/sql/130_health_evaluation_cadence.sql"),
+            KNOWN_CONTROL_SQL.index("control_plane/sql/140_dynamic_table_observability_enrichment.sql"),
         )
         self.assertTrue(build_control_plan(root).ready)
 
