@@ -85,6 +85,7 @@ FROM COUNTS;
 
 -- VERSION_VALIDATION has one row per explicit check rather than a hidden approval state.
 -- Keep the latest result per check and summarize it without converting REVIEW_REQUIRED into PASS.
+-- OLDEST_VALIDATED_AT is the freshness gate: one newly rerun check must not hide another stale check.
 CREATE VIEW CONTROL.CANDIDATE_COMPARISON_STATUS_V AS
 WITH RANKED AS (
     SELECT
@@ -105,6 +106,7 @@ SELECT
     ACTIVE_VERSION,
     CANDIDATE_VERSION,
     MAX(VALIDATED_AT) AS VALIDATED_AT,
+    MIN(VALIDATED_AT) AS OLDEST_VALIDATED_AT,
     COUNT(*) AS CHECK_COUNT,
     COUNT_IF(UPPER(STATUS) = 'PASS') AS PASS_COUNT,
     COUNT_IF(UPPER(STATUS) = 'REVIEW_REQUIRED') AS REVIEW_REQUIRED_COUNT,
@@ -181,6 +183,7 @@ SELECT
     Q.FAILED_CHECKS AS DQ_FAILED_CHECKS,
     C.COMPARISON_STATUS,
     C.VALIDATED_AT AS COMPARISON_VALIDATED_AT,
+    C.OLDEST_VALIDATED_AT AS COMPARISON_OLDEST_VALIDATED_AT,
     C.CHECK_COUNT AS COMPARISON_CHECK_COUNT,
     C.REVIEW_REQUIRED_COUNT,
     C.FAIL_COUNT AS COMPARISON_FAIL_COUNT,
@@ -196,7 +199,7 @@ SELECT
         WHEN Q.CHECKED_AT < R.RUNTIME_EVIDENCE_AT THEN 'BLOCKED'
         WHEN C.COMPARISON_STATUS IS NULL THEN 'BLOCKED'
         WHEN C.COMPARISON_STATUS = 'FAILED' THEN 'BLOCKED'
-        WHEN C.VALIDATED_AT < R.RUNTIME_EVIDENCE_AT THEN 'BLOCKED'
+        WHEN C.OLDEST_VALIDATED_AT < R.RUNTIME_EVIDENCE_AT THEN 'BLOCKED'
         WHEN UPPER(Q.DQ_STATUS) = 'WARNING' THEN 'REVIEW_REQUIRED'
         WHEN C.COMPARISON_STATUS = 'REVIEW_REQUIRED' THEN 'REVIEW_REQUIRED'
         ELSE 'READY'
@@ -213,7 +216,7 @@ SELECT
         WHEN Q.CHECKED_AT < R.RUNTIME_EVIDENCE_AT THEN 'candidate DQ evidence is older than latest runtime evidence'
         WHEN C.COMPARISON_STATUS IS NULL THEN 'active-vs-candidate comparison evidence is missing'
         WHEN C.COMPARISON_STATUS = 'FAILED' THEN 'active-vs-candidate comparison failed'
-        WHEN C.VALIDATED_AT < R.RUNTIME_EVIDENCE_AT THEN 'comparison evidence is older than latest runtime evidence'
+        WHEN C.OLDEST_VALIDATED_AT < R.RUNTIME_EVIDENCE_AT THEN 'at least one latest comparison check is older than latest runtime evidence'
         WHEN UPPER(Q.DQ_STATUS) = 'WARNING' THEN 'candidate DQ has WARN evidence that requires explicit review acceptance'
         WHEN C.COMPARISON_STATUS = 'REVIEW_REQUIRED' THEN 'comparison evidence requires explicit review acceptance'
         ELSE 'candidate runtime, DQ, comparison and version invariants are ready'
