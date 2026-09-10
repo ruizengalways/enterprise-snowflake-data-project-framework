@@ -1,0 +1,35 @@
+name: One-time idempotency source patch v2
+
+on:
+  push:
+    branches: [fix/input-idempotency-hardening]
+    paths: [.github/workflows/run-idempotency-patch-026.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: fix/input-idempotency-hardening
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Patch and verify focused renderer contract
+        run: |
+          python tools/patch_idempotency_026.py
+          python -m py_compile src/enterprise_snowflake_framework/pipeline_idempotency.py src/enterprise_snowflake_framework/pipeline_apply.py src/enterprise_snowflake_framework/pipeline_replay.py
+          python -m unittest tests.test_input_idempotency -v
+      - name: Commit source changes only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/enterprise_snowflake_framework/pipeline_apply.py src/enterprise_snowflake_framework/pipeline_replay.py
+          git commit -m "fix: harden incoming idempotency identity"
+          git push origin HEAD:fix/input-idempotency-hardening
