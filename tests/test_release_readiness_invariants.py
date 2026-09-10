@@ -86,6 +86,7 @@ class ReleaseReadinessInvariantTests(unittest.TestCase):
             "CONTROL.RELEASE_RUN",
             "CONTROL.DATASET_VERSION_INVARIANT_V",
             "CONTROL.CANDIDATE_COMPARISON_STATUS_V",
+            "CONTROL.VERSION_RUNTIME_STATUS_V",
             "CONTROL.CANDIDATE_RUNTIME_STATUS_V",
             "CONTROL.RELEASE_READINESS_V",
             "CONTROL.RELEASE_RUN_LATEST_V",
@@ -95,6 +96,8 @@ class ReleaseReadinessInvariantTests(unittest.TestCase):
         self.assertIn("DEPLOYED_STATUS_COUNT > 1", sql)
         self.assertIn("CANDIDATE_VERSION = ACTIVE_VERSION", sql)
         self.assertIn("MIN(VALIDATED_AT) AS OLDEST_VALIDATED_AT", sql)
+        self.assertIn("SILVER_DATA_MAX_AT", sql)
+        self.assertIn("AS DATA_MAX_AT", sql)
         self.assertIn("Q.CHECKED_AT < R.RUNTIME_EVIDENCE_AT", sql)
         self.assertIn("C.OLDEST_VALIDATED_AT < R.RUNTIME_EVIDENCE_AT", sql)
         self.assertIn("at least one latest comparison check is older than latest runtime evidence", sql)
@@ -135,6 +138,7 @@ class ReleaseReadinessInvariantTests(unittest.TestCase):
         postflight = (result.destination / "postflight.sql").read_text(encoding="utf-8")
 
         self.assertIn("CONTROL.RELEASE_READINESS_V", preflight)
+        self.assertIn("COMPARISON_OLDEST_VALIDATED_AT", preflight)
         self.assertIn("REQUESTED_EDGE_STATUS", preflight)
         self.assertNotIn("UPDATE ", preflight)
         self.assertNotIn("INSERT INTO", preflight)
@@ -161,6 +165,12 @@ class ReleaseReadinessInvariantTests(unittest.TestCase):
         self.assertIn("'ROLLBACK', 'v2', 'v1'", rollback)
         self.assertIn("V_CURRENT_CANDIDATE IS NOT NULL", rollback)
         self.assertIn("UPPER(COALESCE(V_TARGET_STATUS, '')) <> 'RETIRED'", rollback)
+        self.assertIn("FROM CONTROL.VERSION_RUNTIME_STATUS_V", rollback)
+        self.assertIn("FROM CONTROL.DQ_LATEST_RUN_V", rollback)
+        self.assertIn("V_TARGET_RUNTIME_STATUS", rollback)
+        self.assertIn("V_TARGET_DQ_STATUS", rollback)
+        self.assertIn("V_TARGET_DQ_CHECKED_AT < V_TARGET_RUNTIME_EVIDENCE_AT", rollback)
+        self.assertIn("V_TARGET_DATA_MAX_AT < V_ACTIVE_DATA_MAX_AT", rollback)
         self.assertIn("CONTROL.RELEASE_RUN_LATEST_V", postflight)
         self.assertIn("CONTROL.DATASET_VERSION_INVARIANT_V", postflight)
 
