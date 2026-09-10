@@ -120,7 +120,11 @@ class PipelineMetricsContractTests(unittest.TestCase):
             self.assertIn("LEGACY_ROWS_UPDATED", sql)
 
             manifest = (root / "control_plane" / "deploy_manifest.txt").read_text(encoding="utf-8")
-            self.assertTrue(manifest.rstrip().endswith("control_plane/sql/110_pipeline_execution_metrics.sql"))
+            self.assertIn("control_plane/sql/110_pipeline_execution_metrics.sql", manifest)
+            self.assertLess(
+                manifest.index("control_plane/sql/110_pipeline_execution_metrics.sql"),
+                manifest.index("control_plane/sql/120_release_readiness.sql"),
+            )
 
             original = (root / "control_plane" / "sql" / "001_objects.sql").read_text(encoding="utf-8")
             self.assertIn("ROWS_UPDATED NUMBER", original)
