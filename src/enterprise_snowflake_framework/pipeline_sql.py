@@ -32,7 +32,16 @@ def _create_only_persistent_procedure(sql: str) -> str:
 
 
 def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any]) -> str:
-    return _create_only_persistent_procedure(_render_apply_sql(pattern, names, contract))
+    sql = _create_only_persistent_procedure(_render_apply_sql(pattern, names, contract))
+    if pattern == "scd1" and "late or out-of-order event must not regress" not in sql:
+        marker = "        WHEN MATCHED AND "
+        note = (
+            "        -- SCD1 is current-state semantics: a late or out-of-order event must not regress an\n"
+            "        -- already newer target row. Equal ordering tuples are duplicate/no-op evidence.\n"
+        )
+        if marker in sql:
+            sql = sql.replace(marker, note + marker, 1)
+    return sql
 
 
 def render_replay_sql(pattern: str, names: PipelineNames, contract: dict[str, Any]) -> str:
