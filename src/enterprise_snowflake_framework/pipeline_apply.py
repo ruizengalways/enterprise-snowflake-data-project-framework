@@ -11,7 +11,7 @@ from .pipeline_model import (
 def _procedure_header(names: PipelineNames) -> str:
     if not names.apply_procedure:
         raise ValueError(f"{names.execution_model} implementation has no apply procedure")
-    return f"""CREATE OR REPLACE PROCEDURE {names.apply_procedure}()\nRETURNS OBJECT\nLANGUAGE SQL\nEXECUTE AS OWNER\nAS\n$$\nDECLARE\n    V_RUN_ID VARCHAR DEFAULT UUID_STRING();\n    V_ROWS_READ NUMBER DEFAULT 0;\n    V_ROWS_INSERTED NUMBER DEFAULT 0;\n    V_ROWS_UPDATED NUMBER DEFAULT 0;\n    V_ROWS_DELETED NUMBER DEFAULT 0;\n    V_DATA_MAX_AT TIMESTAMP_LTZ;\nBEGIN\n"""
+    return f"""CREATE PROCEDURE {names.apply_procedure}()\nRETURNS OBJECT\nLANGUAGE SQL\nEXECUTE AS OWNER\nAS\n$$\nDECLARE\n    V_RUN_ID VARCHAR DEFAULT UUID_STRING();\n    V_ROWS_READ NUMBER DEFAULT 0;\n    V_ROWS_INSERTED NUMBER DEFAULT 0;\n    V_ROWS_UPDATED NUMBER DEFAULT 0;\n    V_ROWS_DELETED NUMBER DEFAULT 0;\n    V_DATA_MAX_AT TIMESTAMP_LTZ;\nBEGIN\n"""
 
 
 def _running_log(names: PipelineNames) -> str:
@@ -32,7 +32,6 @@ def _transaction_failure_block() -> str:
 
 
 def _strictly_newer_expression(incoming: str, existing: str, ordering: list[str]) -> str:
-    """Render a lexicographic ordering comparison for SCD1 current-state protection."""
     if not ordering:
         return "TRUE"
     clauses: list[str] = []
