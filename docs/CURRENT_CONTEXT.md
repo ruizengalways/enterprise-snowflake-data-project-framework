@@ -6,7 +6,7 @@ This file describes the current architecture, not a chronological PR log. For a 
 
 ```text
 repository = ruizengalways/enterprise-snowflake-data-project-framework
-version    = 0.26.0
+version    = 0.27.0
 ```
 
 Always re-check current `main`, open PRs and CI before changing code. Green static CI is not Snowflake certification. A revision is Snowflake-certified only when the trusted workflow emits `snowflake-certification.json` with `status = CERTIFIED` for that exact SHA.
@@ -43,8 +43,6 @@ CONTROL
 
 One business domain normally owns one repository and one domain database per environment. A domain may contain many source systems. Source identity remains explicit in paths and object names. Writable `CONTROL` is domain-local; enterprise monitoring consumes stable read-only exports.
 
-## RAW contract and execution boundary
-
 RAW contracts are reviewed engineering declarations. The Framework never infers business keys, ordering/timestamps, CDC/delete semantics, capture fidelity, idempotency identity or SCD pattern.
 
 ```text
@@ -54,8 +52,6 @@ pattern
 execution_model
   stream_task | dynamic_table | batch_sql | custom
 ```
-
-The source manifest owns logical `pattern` and `raw_contract`; implementation technology and version-local execution policy live in `version.yml`.
 
 Supported combinations remain deliberately narrow:
 
@@ -72,42 +68,57 @@ custom       + custom        = domain-owned
 
 Unsupported combinations fail closed. `procedure` is an implementation artifact, not an execution model.
 
-## Input idempotency hardening — 0.26
+## Evidence-driven correctness releases — 0.26 and 0.27
 
-A real Transport-domain adoption exposed a generated-template defect: target-side `NOT EXISTS` protected against identities already persisted, but two rows carrying the same reviewed `idempotency_key` could still arrive in one apply/replay batch and both pass that check.
+Transport-domain adoption exposed two concrete template defects after the planned architecture roadmap was complete.
 
-Framework 0.26 hardens only `append + stream_task` and `scd2 + stream_task`:
+### 0.26 — input idempotency
+
+Framework 0.26 prevents duplicate identities inside one append/SCD2 apply or replay batch from bypassing a target-side `NOT EXISTS` check.
 
 ```text
 same identity + conflicting payload -> FAIL CLOSED with E_IDEMPOTENCY_CONFLICT
-same identity + identical payload   -> deterministic batch collapse to one row
+same identity + identical payload   -> collapse to one row/event
 already persisted identity           -> existing target/event-ledger guard remains
 ```
 
-Append identity is the RAW `idempotency_key`. SCD2 event identity remains RAW `idempotency_key + ESF_STREAM_ACTION`; delete/insert evidence is not redefined.
+Identity joins are NULL-safe with `IS NOT DISTINCT FROM`. Conflict comparison uses a canonical JSON payload signature. Full replay checks conflicts before destructive candidate clearing.
 
-Apply and replay use the same rule. Full replay checks conflicts before destructive candidate clearing. The Framework does not silently choose a winning conflicting payload and does not become a source checkpoint or universal deduplication engine. See `docs/architecture/INPUT_IDEMPOTENCY.md`.
-
-Template provenance advances only for affected generated contracts:
+0.26 advanced:
 
 ```text
-append_stream_task  revision 2 -> 3
-scd2_stream_task    revision 2 -> 3
+append_stream_task  -> revision 3
+scd2_stream_task    -> revision 3
 ```
 
-SCD1, full-refresh, Dynamic Table and custom template revisions remain unchanged. `esf upgrade-plan` is read-only and reports older registered revisions as `UPDATE_AVAILABLE`; it never rewrites domain-owned code.
+See `docs/architecture/INPUT_IDEMPOTENCY.md`.
+
+### 0.27 — replay-stable SCD2 event identity
+
+The Transport SCD2 RAW contract uses retained full-change rows with `source_operation = D` tombstones. Framework 0.26 replay incorrectly converted such a retained row into synthetic `ESF_STREAM_ACTION = DELETE`, mixing source delete semantics with Snowflake physical Stream action.
+
+Framework 0.27 separates them:
+
+```text
+retained Bronze row replay       -> synthetic ESF_STREAM_ACTION = INSERT
+source tombstone delete meaning  -> reviewed operation column / delete_values
+```
+
+History construction still treats the reviewed tombstone as a delete boundary and does not emit it as an active SCD2 row. Only `scd2_stream_task` advances from revision 3 to **revision 4**. `append_stream_task` remains revision 3.
+
+`esf upgrade-plan` stays read-only. A 0.26 SCD2 rev3 scaffold reports `UPDATE_AVAILABLE`; a 0.26 append rev3 scaffold remains `CURRENT` under 0.27 because its artifact contract did not change.
 
 ## Earlier stable contracts
 
 Framework 0.20 established canonical explicit-pipeline metrics: `ROWS_AFFECTED = SQLROWCOUNT` for the primary Silver DML and `DML_QUERY_ID = SQLID` captured immediately after that DML.
 
-Framework 0.21 added guarded release readiness and release audit. `BLOCKED` has no bypass; `REVIEW_REQUIRED` requires explicit operator acceptance and reason. `CANDIDATE_VERSION` remains a single-candidate convenience/lock rather than a speculative lifecycle state machine.
+Framework 0.21 added guarded release readiness and release audit. `BLOCKED` has no bypass; `REVIEW_REQUIRED` requires explicit operator acceptance and reason.
 
 Framework 0.22 added deterministic template provenance and read-only `esf upgrade-plan` statuses: `CURRENT`, `UPDATE_AVAILABLE`, `ADVISORY`, `UNKNOWN`, `UNVERIFIED`.
 
-Framework 0.23 added narrow version-local Stream/Task operational policy: warehouse, minimum trigger interval, timeout, suspend-after-failures and optional error integration. It does not expose arbitrary schedules, generic task graphs or universal orchestration metadata.
+Framework 0.23 added narrow version-local Stream/Task operational policy: warehouse, minimum trigger interval, timeout, suspend-after-failures and optional error integration. It does not expose arbitrary schedules or generic task graphs.
 
-Framework 0.24 added explicit audited domain health-evaluator cadence operations through migration `130_health_evaluation_cadence.sql` without editing released migration 040 or silently retuning a live Task.
+Framework 0.24 added explicit audited domain health-evaluator cadence operations through migration `130_health_evaluation_cadence.sql` without editing released migration 040.
 
 Framework 0.25 added migration `140_dynamic_table_observability_enrichment.sql`, enriching the existing Snowflake-native Dynamic Table observability path while keeping `CONTROL.DATASET_OBSERVABILITY_V` as the one unified evidence surface. It does not fabricate Dynamic Table `PIPELINE_RUN` rows.
 
@@ -132,7 +143,7 @@ Unify evidence contracts, not runtime mechanics. Do not add a second competing e
 
 ## Control Plane migrations
 
-Framework 0.26 adds **no Control migration**. Fresh projects still contain the released chain through 140:
+Framework 0.27 adds **no Control migration**. Fresh projects still contain the released chain through 140:
 
 ```text
 001_objects.sql
@@ -179,8 +190,15 @@ dbt begins at trusted Silver and owns downstream Gold/Mart/Semantic transformati
 
 ## Current evidence-driven priority
 
-The planned architecture roadmap through 0.25 is complete. Framework 0.26 exists because real Transport adoption found a concrete template correctness defect.
+After Framework 0.27 is merged and static CI is green, return to `enterprise-snowflake-transport-analytics` and recreate the unmerged shadow Silver implementations from the **exact merged 0.27 SHA**.
 
-After 0.26 is merged and static CI is green, return to `enterprise-snowflake-transport-analytics`: regenerate its unmerged shadow Silver v1 implementations from the exact 0.26 SHA, verify revision-3 provenance and idempotency guards, compare against the existing legacy dbt Silver outputs, and only then consider Control/deployment adoption.
+Expected current provenance after regeneration:
+
+```text
+fleet_mssql.vehicle_status      -> scd2_stream_task revision 4
+gtfs_realtime.vehicle_position  -> append_stream_task revision 3
+```
+
+Keep them shadow-only: no root Silver deploy-manifest adoption, no Control-plane initialization and no production cutover as a scaffold side effect. Compare legacy dbt Silver against the generated implementations, with explicit tests for duplicate identities, conflicting payloads, tombstone delete/reinsert, same timestamp/sequence, late arrivals and consecutive identical SCD2 state.
 
 Do not add another Framework abstraction merely to continue a roadmap. Prefer live Snowflake certification/integration evidence and concrete domain-adoption defects as the trigger for future changes.
