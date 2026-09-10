@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from .control_plan import build_control_plan
+from .dataset_management import add_dataset
 from .init_project import initialize_project
 from .lifecycle import LIFECYCLE_ACTIONS, generate_lifecycle_scripts
 from .plan import SourcePlan, build_source_plan
@@ -40,6 +41,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_source_parser.add_argument("source_id")
     add_source_parser.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    add_dataset_parser = subparsers.add_parser(
+        "add-dataset",
+        help="Append one dataset declaration to a source manifest without scaffolding SQL.",
+    )
+    add_dataset_parser.add_argument("dataset_id")
+    add_dataset_parser.add_argument("--source", required=True, dest="source_id")
+    add_dataset_parser.add_argument("--pattern", required=True, choices=sorted(SUPPORTED_PATTERNS))
+    add_dataset_parser.add_argument(
+        "--raw-contract",
+        help="Project-relative RAW contract path; defaults to contracts/raw/<source>/<dataset>.yml.",
+    )
+    add_dataset_parser.add_argument("--project-root", type=Path, default=Path.cwd())
 
     plan = subparsers.add_parser("plan", help="Show append-only scaffold actions without writing files.")
     plan.add_argument("--source", required=True, dest="source_id")
@@ -224,6 +238,27 @@ def main() -> None:
                 if result.created
                 else f"Source already exists: {result.source_id}. No files changed."
             )
+            return
+
+        if args.command == "add-dataset":
+            result = add_dataset(
+                project_root=args.project_root,
+                source_id=args.source_id,
+                dataset_id=args.dataset_id,
+                pattern=args.pattern,
+                raw_contract=args.raw_contract,
+            )
+            if result.created:
+                print(
+                    f"Added dataset: {result.source_id}.{result.dataset_id} "
+                    f"({result.pattern}) -> {result.raw_contract}"
+                )
+                print("No Silver files were scaffolded. Run `esf plan` or `esf scaffold-preview` next.")
+            else:
+                print(
+                    f"Dataset already exists: {result.source_id}.{result.dataset_id}. "
+                    "No files changed."
+                )
             return
 
         if args.command == "plan":
