@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -29,6 +30,16 @@ class DeploymentPreflightTests(unittest.TestCase):
         self.assertIn("Deployment preflight: READY", text)
         self.assertIn("No files changed.", text)
 
+    def test_installed_entrypoint_returns_zero_for_ready_project(self) -> None:
+        completed = subprocess.run(
+            ["esf-control-preflight", "--project-root", str(self.root)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertIn("Deployment preflight: READY", completed.stdout)
+
     def test_missing_known_migration_blocks_before_deployment(self) -> None:
         missing = KNOWN_CONTROL_SQL[-1]
         text = self.manifest.read_text(encoding="utf-8").replace(f"{missing}\n", "")
@@ -42,6 +53,15 @@ class DeploymentPreflightTests(unittest.TestCase):
             result.errors,
         )
         self.assertIn("Deployment preflight: BLOCKED", render_deployment_preflight(result))
+
+        completed = subprocess.run(
+            ["esf-control-preflight", "--project-root", str(self.root)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(2, completed.returncode)
+        self.assertIn(missing, completed.stdout)
 
     def test_known_migrations_out_of_order_block(self) -> None:
         entries = [
@@ -73,6 +93,8 @@ class DeploymentPreflightTests(unittest.TestCase):
 
     def test_domain_owned_control_entries_are_allowed_without_reordering_framework_migrations(self) -> None:
         custom = "control_plane/sql/900_domain_specific_policy.sql"
+        custom_path = self.root / custom
+        custom_path.write_text("-- domain-owned migration\n", encoding="utf-8")
         with self.manifest.open("a", encoding="utf-8") as handle:
             handle.write(f"{custom}\n")
 
