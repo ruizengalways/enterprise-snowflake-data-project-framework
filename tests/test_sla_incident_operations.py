@@ -80,6 +80,7 @@ class SlaIncidentOperationTests(unittest.TestCase):
             "090_dataset_execution_model.sql",
             "100_dynamic_table_observability.sql",
             "110_pipeline_execution_metrics.sql",
+            "120_release_readiness.sql",
         }
         actual = {path.name for path in (self.root / "control_plane" / "sql").glob("*.sql")}
         self.assertEqual(expected, actual)
@@ -106,6 +107,7 @@ class SlaIncidentOperationTests(unittest.TestCase):
             "090_dataset_execution_model.sql",
             "100_dynamic_table_observability.sql",
             "110_pipeline_execution_metrics.sql",
+            "120_release_readiness.sql",
         ):
             (self.root / "control_plane" / "sql" / name).unlink()
 
@@ -125,6 +127,7 @@ class SlaIncidentOperationTests(unittest.TestCase):
                 "control_plane/sql/090_dataset_execution_model.sql",
                 "control_plane/sql/100_dynamic_table_observability.sql",
                 "control_plane/sql/110_pipeline_execution_metrics.sql",
+                "control_plane/sql/120_release_readiness.sql",
             ),
             plan.missing_from_manifest,
         )
