@@ -8,6 +8,7 @@ from .dataset_management import add_dataset
 from .init_project import initialize_project
 from .lifecycle import LIFECYCLE_ACTIONS, generate_lifecycle_scripts
 from .plan import SourcePlan, build_source_plan
+from .raw_contract_authoring import create_raw_contract_draft, finalize_raw_contract
 from .repair import PROBLEM_LAYERS, build_repair_plan, generate_silver_repair_scripts
 from .scaffold import (
     SUPPORTED_PATTERNS,
@@ -41,6 +42,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_source_parser.add_argument("source_id")
     add_source_parser.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    raw_draft = subparsers.add_parser(
+        "raw-contract-draft",
+        help="Create one non-production RAW contract draft with explicit TODO decisions.",
+    )
+    raw_draft.add_argument("dataset_id")
+    raw_draft.add_argument("--source", required=True, dest="source_id")
+    raw_draft.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    raw_finalize = subparsers.add_parser(
+        "raw-contract-finalize",
+        help="Validate and promote one reviewed draft into contracts/raw without overwriting.",
+    )
+    raw_finalize.add_argument("dataset_id")
+    raw_finalize.add_argument("--source", required=True, dest="source_id")
+    raw_finalize.add_argument("--project-root", type=Path, default=Path.cwd())
 
     add_dataset_parser = subparsers.add_parser(
         "add-dataset",
@@ -240,6 +257,32 @@ def main() -> None:
             )
             return
 
+        if args.command == "raw-contract-draft":
+            result = create_raw_contract_draft(
+                project_root=args.project_root,
+                source_id=args.source_id,
+                dataset_id=args.dataset_id,
+            )
+            if result.created:
+                print(f"Created RAW contract draft: {result.destination}")
+                print("Edit every TODO value, then run `esf raw-contract-finalize`.")
+            else:
+                print(f"RAW contract draft not created: {result.reason}. No files changed.")
+            return
+
+        if args.command == "raw-contract-finalize":
+            result = finalize_raw_contract(
+                project_root=args.project_root,
+                source_id=args.source_id,
+                dataset_id=args.dataset_id,
+            )
+            if result.created:
+                print(f"Finalized RAW contract: {result.destination}")
+                print("No dataset declaration was added. Run `esf add-dataset` after review.")
+            else:
+                print(f"RAW contract not finalized: {result.reason}. No files changed.")
+            return
+
         if args.command == "add-dataset":
             result = add_dataset(
                 project_root=args.project_root,
@@ -304,7 +347,10 @@ def main() -> None:
             else:
                 print(f"SKIPPED / DOMAIN OWNED: {result.destination}")
                 if result.missing_standard_files:
-                    print("WARNING: existing dataset directory does not match standard scaffold layout. No files changed.")
+                    print(
+                        "WARNING: existing dataset directory does not match standard "
+                        "scaffold layout. No files changed."
+                    )
             return
 
         if args.command == "scaffold-all":
@@ -315,7 +361,10 @@ def main() -> None:
             print(f"Overwritten: {result.overwritten}")
             for item in result.skipped:
                 if item.missing_standard_files:
-                    print(f"WARNING: {item.destination} does not match standard scaffold layout. No files changed.")
+                    print(
+                        f"WARNING: {item.destination} does not match standard scaffold "
+                        "layout. No files changed."
+                    )
             return
 
         if args.command == "scaffold-version":
