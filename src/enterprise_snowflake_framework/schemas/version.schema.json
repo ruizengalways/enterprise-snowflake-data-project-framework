@@ -10,7 +10,7 @@
     "version": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["dataset", "id", "initial_status", "activation", "execution_model"],
+      "required": ["dataset", "id", "initial_status", "activation"],
       "properties": {
         "dataset": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}\\.[a-z][a-z0-9_]{1,63}$"},
         "id": {"type": "string", "pattern": "^v[1-9][0-9]*$"},
