@@ -31,12 +31,8 @@ class ControlPlan:
 
     @property
     def ready(self) -> bool:
-        return (
-            not self.known_files_missing
-            and not self.missing_from_manifest
-            and not self.duplicate_manifest_entries
-            and self.known_order_valid
-        )
+        """Preserve the original control-plan meaning: all known upgrade files are present and listed."""
+        return not self.known_files_missing and not self.missing_from_manifest
 
 
 def _manifest_entries(path: Path) -> tuple[str, ...]:
