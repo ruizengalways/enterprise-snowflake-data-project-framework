@@ -177,11 +177,13 @@ class DataQualityReconciliationEvidenceTests(unittest.TestCase):
         self.assertIn("VALIDATE_FLEET_MSSQL_CUSTOMER_V2", task)
         control = self._control_sql()
         self.assertIn("Q.VERSION = D.ACTIVE_VERSION", control)
+        readme = (self.root / "operations" / "reconciliation" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Candidate-version evidence is retained for release review", readme)
         self.assertIn(
-            "candidate DQ evidence",
-            (self.root / "operations" / "reconciliation" / "README.md").read_text(
-                encoding="utf-8"
-            ),
+            "does not make the currently active production dataset unhealthy",
+            readme,
         )
 
     def test_reconciliation_guidance_does_not_assume_count_equality(self) -> None:
