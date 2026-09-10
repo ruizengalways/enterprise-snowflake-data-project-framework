@@ -147,6 +147,22 @@ custom       + custom        = domain-owned
 
 See `docs/architecture/EXECUTION_MODELS.md`.
 
+## Version-local Stream/Task policy
+
+For a new `stream_task` implementation, Task execution policy belongs to `version.yml`, not the logical source manifest or SLA. Framework 0.23 supports only the narrow direct Snowflake mapping:
+
+```text
+warehouse                        -> WAREHOUSE
+minimum_trigger_interval_seconds -> USER_TASK_MINIMUM_TRIGGER_INTERVAL_IN_SECONDS
+timeout_seconds                  -> USER_TASK_TIMEOUT_MS
+suspend_after_failures           -> SUSPEND_TASK_AFTER_NUM_FAILURES
+error_integration                -> ERROR_INTEGRATION
+```
+
+Optional values are omitted when unspecified so Snowflake defaults remain in effect. Minimum trigger interval is only valid for generated Stream-triggered `append`, `scd1` and `scd2` implementations.
+
+The Framework does not expose arbitrary schedules, generic `AFTER` task graphs, `TASK_AUTO_RETRY_ATTEMPTS`, or a universal orchestration/readiness DSL here. See `docs/architecture/TASK_OPERATIONAL_CONFIG.md`.
+
 ## Generated-once ownership
 
 A standard Stream/Task implementation typically owns:
@@ -184,7 +200,7 @@ There is deliberately no scaffold `--force`. A Framework upgrade may add a new p
 
 Each domain owns its writable `CONTROL` schema. Do not put all domains into one shared writable runtime control database. Enterprise monitoring consumes stable read-only exports instead.
 
-A fresh 0.22 project contains committed Control migrations through `120_release_readiness.sql`:
+A fresh 0.24 project contains committed Control migrations through `130_health_evaluation_cadence.sql`:
 
 ```text
 001_objects.sql
@@ -200,9 +216,10 @@ A fresh 0.22 project contains committed Control migrations through `120_release_
 100_dynamic_table_observability.sql
 110_pipeline_execution_metrics.sql
 120_release_readiness.sql
+130_health_evaluation_cadence.sql
 ```
 
-Released numbered migrations are immutable. Never edit 001..120 in place after release; append a later migration.
+Released numbered migrations are immutable. Never edit 001..130 in place after release; append a later migration.
 
 Key later contracts are:
 
@@ -218,17 +235,21 @@ Key later contracts are:
 
 120_release_readiness.sql
   -> candidate/release readiness, active/candidate invariants and release audit surfaces
+
+130_health_evaluation_cadence.sql
+  -> audited domain health cadence changes without silently retuning migration 040
 ```
 
 Operational evidence remains normalized, not centralized runtime control:
 
 ```text
-source-specific ingestion -> CONTROL.INGESTION_RUN
-explicit Silver apply     -> CONTROL.PIPELINE_RUN
-Silver validation         -> CONTROL.DQ_RESULT
-dbt model result          -> CONTROL.DBT_RUN
-reconciliation code       -> CONTROL.RECONCILIATION_RESULT
-release/rollback attempt  -> CONTROL.RELEASE_RUN
+source-specific ingestion  -> CONTROL.INGESTION_RUN
+explicit Silver apply      -> CONTROL.PIPELINE_RUN
+Silver validation          -> CONTROL.DQ_RESULT
+dbt model result           -> CONTROL.DBT_RUN
+reconciliation code        -> CONTROL.RECONCILIATION_RESULT
+release/rollback attempt   -> CONTROL.RELEASE_RUN
+health cadence change      -> CONTROL.HEALTH_EVALUATION_CHANGE
 ```
 
 ## Canonical explicit-run metrics
@@ -327,18 +348,18 @@ The Framework keeps `CONTROL.DATASET.CANDIDATE_VERSION` as a single-candidate co
 
 ## Template provenance and upgrade planning
 
-Framework 0.22 stamps every newly scaffolded implementation version with deterministic provenance:
+Newly scaffolded implementation versions carry deterministic provenance:
 
 ```yaml
 version:
   provenance:
-    framework_version: 0.22.0
+    framework_version: 0.24.0
     template_id: scd2_stream_task
-    template_revision: 1
+    template_revision: 2
     template_digest: sha256:...
 ```
 
-The immutable compatibility identity is template id + revision + digest. There is deliberately no `scaffolded_at` timestamp in this identity.
+The immutable compatibility identity is template id + revision + digest. There is deliberately no scaffold timestamp in this identity.
 
 Run the read-only planner with:
 
@@ -356,9 +377,23 @@ Reconciliation is similarly conservative. Domain/source-specific code computes a
 
 Candidate evidence stays isolated from active production health. `ERROR` failures can contribute RED health/incidents; `WARN` failures contribute YELLOW without automatic failure incident creation. See `docs/architecture/DATA_QUALITY_RECONCILIATION.md`.
 
-## SLA, health and enterprise monitoring
+## SLA and domain health evaluator cadence
 
-SLA belongs to the logical dataset, not to the source manifest or implementation version. Supported cadence models are `CONTINUOUS`, `INTERVAL` and `SCHEDULED_DEADLINE`. Latency and freshness are separate metrics. Execution settings such as Dynamic Table target lag or Task timing are not automatically treated as SLA thresholds.
+SLA belongs to the logical dataset, not the source manifest or implementation version. Supported cadence models are `CONTINUOUS`, `INTERVAL` and `SCHEDULED_DEADLINE`. Latency and freshness are separate metrics. Execution settings such as Dynamic Table target lag or Task timing are not automatically treated as SLA thresholds.
+
+The historical released `040_health_task.sql` created `CONTROL.EVALUATE_DOMAIN_HEALTH_TASK` with a one-minute schedule. Framework 0.24 does **not** edit 040. Instead migration 130 creates an audit/read contract, and an engineer generates an explicit cadence operation:
+
+```bash
+esf health-cadence-sql health-every-5m \
+  --interval-seconds 300 \
+  --reason "Five-minute health evaluation is appropriate for this domain" \
+  --resume-after \
+  --project-root .
+```
+
+The first contract supports Snowflake interval schedules from 10 to 691200 seconds and deliberately excludes cron. The operator must explicitly choose `--resume-after` or `--leave-suspended`.
+
+Migration 130 itself performs no `ALTER TASK`, so upgrading the Framework never silently retunes a running domain. Generated preflight/postflight files use `SHOW TASKS` to verify actual Snowflake state and schedule. See `docs/architecture/HEALTH_EVALUATION_CADENCE.md`.
 
 Each domain exposes stable read-only enterprise health contracts such as:
 
@@ -368,8 +403,6 @@ CONTROL.DOMAIN_HEALTH_SUMMARY_V
 ```
 
 Enterprise monitoring may aggregate those surfaces; writable health state remains domain-local.
-
-The historical released `040_health_task.sql` contains a one-minute health-evaluation schedule. A future configurable cadence must be implemented with a **new migration/configuration mechanism**, never by editing released 040.
 
 ## Repair and lifecycle
 
@@ -409,11 +442,26 @@ esf scaffold scd2 customer --source fleet_mssql --project-root .
 esf scaffold-all --source fleet_mssql --project-root .
 esf scaffold-version customer v2 --source fleet_mssql --project-root .
 
+# Example version-local Task tuning for a new Stream/Task candidate:
+esf scaffold-version customer v3 \
+  --source fleet_mssql \
+  --execution-model stream_task \
+  --warehouse WH_TRANSPORT_TRANSFORM \
+  --task-timeout-seconds 900 \
+  --task-suspend-after-failures 3 \
+  --project-root .
+
 esf sla-sql customer freshness_v1 \
   --source fleet_mssql \
   --stage END_TO_END \
   --cadence CONTINUOUS \
   --max-freshness-seconds 600 \
+  --project-root .
+
+esf health-cadence-sql health-every-5m \
+  --interval-seconds 300 \
+  --reason "Reviewed domain health cadence" \
+  --resume-after \
   --project-root .
 
 esf lifecycle-sql customer pause_incident_123 \

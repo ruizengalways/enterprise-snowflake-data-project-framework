@@ -6,6 +6,7 @@ from pathlib import Path
 from .control_plan import build_control_plan
 from .dataset_management import add_dataset
 from .execution_model import SUPPORTED_EXECUTION_MODELS
+from .health_cadence import generate_health_cadence_scripts
 from .init_project import initialize_project
 from .lifecycle import LIFECYCLE_ACTIONS, generate_lifecycle_scripts
 from .plan import SourcePlan, build_source_plan
@@ -114,8 +115,7 @@ def _build_parser() -> argparse.ArgumentParser:
     raw_finalize.add_argument("--project-root", type=Path, default=Path.cwd())
 
     add_dataset_parser = subparsers.add_parser(
-        "add-dataset",
-        help="Append one dataset declaration to a source manifest without scaffolding SQL.",
+        "add-dataset", help="Append one dataset declaration to a source manifest without scaffolding SQL."
     )
     add_dataset_parser.add_argument("dataset_id")
     add_dataset_parser.add_argument("--source", required=True, dest="source_id")
@@ -142,6 +142,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     upgrade_plan.add_argument("--project-root", type=Path, default=Path.cwd())
 
+    health_cadence = subparsers.add_parser(
+        "health-cadence-sql",
+        help="Generate a reviewed domain health evaluator cadence change; never execute it.",
+    )
+    health_cadence.add_argument("operation_id")
+    health_cadence.add_argument("--interval-seconds", required=True, type=int)
+    health_cadence.add_argument("--reason", required=True)
+    final_state = health_cadence.add_mutually_exclusive_group(required=True)
+    final_state.add_argument("--resume-after", action="store_true")
+    final_state.add_argument("--leave-suspended", action="store_true")
+    health_cadence.add_argument("--output-root", type=Path)
+    health_cadence.add_argument("--project-root", type=Path, default=Path.cwd())
+
     preview = subparsers.add_parser(
         "scaffold-preview", help="Render a new dataset starter in memory without writing files."
     )
@@ -151,9 +164,7 @@ def _build_parser() -> argparse.ArgumentParser:
     preview.add_argument("--project-root", type=Path, default=Path.cwd())
     _add_execution_args(preview)
 
-    scaffold = subparsers.add_parser(
-        "scaffold", help="Create one new domain-owned Silver dataset directory."
-    )
+    scaffold = subparsers.add_parser("scaffold", help="Create one new domain-owned Silver dataset directory.")
     scaffold.add_argument("pattern", choices=sorted(SUPPORTED_PATTERNS))
     scaffold.add_argument("dataset_id")
     scaffold.add_argument("--source", required=True, dest="source_id")
@@ -161,7 +172,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_execution_args(scaffold)
 
     scaffold_all_parser = subparsers.add_parser(
-        "scaffold-all", help="Create only missing dataset directories declared by one source manifest using default execution models."
+        "scaffold-all",
+        help="Create only missing dataset directories declared by one source manifest using default execution models.",
     )
     scaffold_all_parser.add_argument("--source", required=True, dest="source_id")
     scaffold_all_parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -177,8 +189,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_execution_args(scaffold_version_parser)
 
     sla_sql = subparsers.add_parser(
-        "sla-sql",
-        help="Generate an explicit logical-dataset SLA policy revision for review; never execute it.",
+        "sla-sql", help="Generate an explicit logical-dataset SLA policy revision for review; never execute it."
     )
     sla_sql.add_argument("dataset_id")
     sla_sql.add_argument("policy_id")
@@ -235,13 +246,11 @@ def _build_parser() -> argparse.ArgumentParser:
     release_sql.add_argument("--from-version", required=True)
     release_sql.add_argument("--to-version", required=True)
     release_sql.add_argument(
-        "--allow-review-required",
-        action="store_true",
+        "--allow-review-required", action="store_true",
         help="Accept REVIEW_REQUIRED evidence after human review. BLOCKED evidence can never be bypassed.",
     )
     release_sql.add_argument(
-        "--reason",
-        dest="operator_reason",
+        "--reason", dest="operator_reason",
         help="Operator review reason. Required with --allow-review-required and embedded in RELEASE_RUN audit SQL.",
     )
     release_sql.add_argument("--output-root", type=Path)
@@ -323,19 +332,11 @@ def main() -> None:
 
         if args.command == "add-source":
             result = add_source(args.project_root, args.source_id)
-            print(
-                f"Added source: {result.source_id}"
-                if result.created
-                else f"Source already exists: {result.source_id}. No files changed."
-            )
+            print(f"Added source: {result.source_id}" if result.created else f"Source already exists: {result.source_id}. No files changed.")
             return
 
         if args.command == "raw-contract-draft":
-            result = create_raw_contract_draft(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                dataset_id=args.dataset_id,
-            )
+            result = create_raw_contract_draft(project_root=args.project_root, source_id=args.source_id, dataset_id=args.dataset_id)
             if result.created:
                 print(f"Created RAW contract draft: {result.destination}")
                 print("Edit every TODO value, then run `esf raw-contract-finalize`.")
@@ -344,11 +345,7 @@ def main() -> None:
             return
 
         if args.command == "raw-contract-finalize":
-            result = finalize_raw_contract(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                dataset_id=args.dataset_id,
-            )
+            result = finalize_raw_contract(project_root=args.project_root, source_id=args.source_id, dataset_id=args.dataset_id)
             if result.created:
                 print(f"Finalized RAW contract: {result.destination}")
                 print("No dataset declaration was added. Run `esf add-dataset` after review.")
@@ -357,48 +354,44 @@ def main() -> None:
             return
 
         if args.command == "add-dataset":
-            result = add_dataset(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                dataset_id=args.dataset_id,
-                pattern=args.pattern,
-                raw_contract=args.raw_contract,
-            )
+            result = add_dataset(project_root=args.project_root, source_id=args.source_id, dataset_id=args.dataset_id, pattern=args.pattern, raw_contract=args.raw_contract)
             if result.created:
-                print(
-                    f"Added dataset: {result.source_id}.{result.dataset_id} "
-                    f"({result.pattern}) -> {result.raw_contract}"
-                )
+                print(f"Added dataset: {result.source_id}.{result.dataset_id} ({result.pattern}) -> {result.raw_contract}")
                 print("No Silver files were scaffolded. Run `esf plan` or `esf scaffold-preview` next.")
             else:
-                print(
-                    f"Dataset already exists: {result.source_id}.{result.dataset_id}. "
-                    "No files changed."
-                )
+                print(f"Dataset already exists: {result.source_id}.{result.dataset_id}. No files changed.")
             return
 
         if args.command == "plan":
             _print_plan(build_source_plan(args.project_root, args.source_id))
             return
-
         if args.command == "control-plan":
             _print_control_plan(args.project_root)
             return
-
         if args.command == "upgrade-plan":
             print(build_upgrade_plan(args.project_root).render(), end="")
+            return
+        if args.command == "health-cadence-sql":
+            result = generate_health_cadence_scripts(
+                project_root=args.project_root,
+                operation_id=args.operation_id,
+                interval_seconds=args.interval_seconds,
+                reason=args.reason,
+                resume_after=args.resume_after,
+                output_root=args.output_root,
+            )
+            print(
+                f"Generated health cadence operation: {result.destination}"
+                if result.created
+                else f"SKIPPED / HEALTH OPERATION OWNED: {result.destination}. No files changed."
+            )
             return
 
         if args.command == "scaffold-preview":
             result = scaffold_preview(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                dataset_id=args.dataset_id,
-                execution_model=args.execution_model,
-                target_lag=args.target_lag,
-                warehouse=args.warehouse,
-                refresh_mode=args.refresh_mode,
-                **_task_args(args),
+                project_root=args.project_root, source_id=args.source_id, dataset_id=args.dataset_id,
+                execution_model=args.execution_model, target_lag=args.target_lag, warehouse=args.warehouse,
+                refresh_mode=args.refresh_mode, **_task_args(args),
             )
             print(f"Dataset: {result.source_id}.{result.dataset_id}")
             print(f"Destination: {result.destination}")
@@ -419,25 +412,16 @@ def main() -> None:
 
         if args.command == "scaffold":
             result = scaffold_pipeline(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                pattern=args.pattern,
-                dataset_id=args.dataset_id,
-                execution_model=args.execution_model,
-                target_lag=args.target_lag,
-                warehouse=args.warehouse,
-                refresh_mode=args.refresh_mode,
-                **_task_args(args),
+                project_root=args.project_root, source_id=args.source_id, pattern=args.pattern,
+                dataset_id=args.dataset_id, execution_model=args.execution_model, target_lag=args.target_lag,
+                warehouse=args.warehouse, refresh_mode=args.refresh_mode, **_task_args(args),
             )
             if result.created:
                 print(f"Created: {result.destination}")
             else:
                 print(f"SKIPPED / DOMAIN OWNED: {result.destination}")
                 if result.missing_standard_files:
-                    print(
-                        "WARNING: existing dataset directory does not match its execution-specific "
-                        "scaffold layout. No files changed."
-                    )
+                    print("WARNING: existing dataset directory does not match its execution-specific scaffold layout. No files changed.")
             return
 
         if args.command == "scaffold-all":
@@ -448,116 +432,61 @@ def main() -> None:
             print(f"Overwritten: {result.overwritten}")
             for item in result.skipped:
                 if item.missing_standard_files:
-                    print(
-                        f"WARNING: {item.destination} does not match its execution-specific "
-                        "scaffold layout. No files changed."
-                    )
+                    print(f"WARNING: {item.destination} does not match its execution-specific scaffold layout. No files changed.")
             return
 
         if args.command == "scaffold-version":
             result = scaffold_version(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                dataset_id=args.dataset_id,
-                version=args.version,
-                execution_model=args.execution_model,
-                target_lag=args.target_lag,
-                warehouse=args.warehouse,
-                refresh_mode=args.refresh_mode,
-                **_task_args(args),
+                project_root=args.project_root, source_id=args.source_id, dataset_id=args.dataset_id,
+                version=args.version, execution_model=args.execution_model, target_lag=args.target_lag,
+                warehouse=args.warehouse, refresh_mode=args.refresh_mode, **_task_args(args),
             )
-            print(
-                f"Created candidate: {result.destination}"
-                if result.created
-                else f"SKIPPED / VERSION OWNED: {result.destination}. No files changed."
-            )
+            print(f"Created candidate: {result.destination}" if result.created else f"SKIPPED / VERSION OWNED: {result.destination}. No files changed.")
             return
 
         if args.command == "sla-sql":
             result = generate_sla_sql(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                dataset_id=args.dataset_id,
-                policy_id=args.policy_id,
-                stage=args.stage,
-                cadence_type=args.cadence,
-                max_latency_seconds=args.max_latency_seconds,
-                max_freshness_seconds=args.max_freshness_seconds,
-                expected_interval_seconds=args.expected_interval_seconds,
-                deadline_local_time=args.deadline_local_time,
-                timezone=args.timezone,
-                enabled=not args.disabled,
-                output_root=args.output_root,
+                project_root=args.project_root, source_id=args.source_id, dataset_id=args.dataset_id,
+                policy_id=args.policy_id, stage=args.stage, cadence_type=args.cadence,
+                max_latency_seconds=args.max_latency_seconds, max_freshness_seconds=args.max_freshness_seconds,
+                expected_interval_seconds=args.expected_interval_seconds, deadline_local_time=args.deadline_local_time,
+                timezone=args.timezone, enabled=not args.disabled, output_root=args.output_root,
             )
-            print(
-                f"Generated SLA policy SQL: {result.destination}"
-                if result.created
-                else f"SKIPPED / SLA POLICY OWNED: {result.destination}. No files changed."
-            )
+            print(f"Generated SLA policy SQL: {result.destination}" if result.created else f"SKIPPED / SLA POLICY OWNED: {result.destination}. No files changed.")
             return
 
         if args.command == "lifecycle-sql":
             result = generate_lifecycle_scripts(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                dataset_id=args.dataset_id,
-                action=args.action,
-                operation_id=args.operation_id,
-                version=args.version,
-                output_root=args.output_root,
+                project_root=args.project_root, source_id=args.source_id, dataset_id=args.dataset_id,
+                action=args.action, operation_id=args.operation_id, version=args.version, output_root=args.output_root,
             )
-            print(
-                f"Generated lifecycle scripts: {result.destination}"
-                if result.created
-                else f"SKIPPED / LIFECYCLE OWNED: {result.destination}. No files changed."
-            )
+            print(f"Generated lifecycle scripts: {result.destination}" if result.created else f"SKIPPED / LIFECYCLE OWNED: {result.destination}. No files changed.")
             return
 
         if args.command == "repair-plan":
             result = build_repair_plan(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                dataset_id=args.dataset_id,
-                problem=args.problem,
-                requested_from=args.requested_from,
-                requested_to=args.requested_to,
+                project_root=args.project_root, source_id=args.source_id, dataset_id=args.dataset_id,
+                problem=args.problem, requested_from=args.requested_from, requested_to=args.requested_to,
             )
             print(result.render(), end="")
             return
 
         if args.command == "repair-sql":
             result = generate_silver_repair_scripts(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                dataset_id=args.dataset_id,
-                candidate_version=args.version,
-                requested_from=args.requested_from,
-                requested_to=args.requested_to,
-                output_root=args.output_root,
+                project_root=args.project_root, source_id=args.source_id, dataset_id=args.dataset_id,
+                candidate_version=args.version, requested_from=args.requested_from,
+                requested_to=args.requested_to, output_root=args.output_root,
             )
-            print(
-                f"Generated repair scripts: {result.destination}"
-                if result.created
-                else f"SKIPPED / REPAIR OWNED: {result.destination}. No files changed."
-            )
+            print(f"Generated repair scripts: {result.destination}" if result.created else f"SKIPPED / REPAIR OWNED: {result.destination}. No files changed.")
             return
 
         if args.command == "release-sql":
             result = generate_release_scripts(
-                project_root=args.project_root,
-                source_id=args.source_id,
-                dataset_id=args.dataset_id,
-                from_version=args.from_version,
-                to_version=args.to_version,
-                output_root=args.output_root,
-                allow_review_required=args.allow_review_required,
-                operator_reason=args.operator_reason,
+                project_root=args.project_root, source_id=args.source_id, dataset_id=args.dataset_id,
+                from_version=args.from_version, to_version=args.to_version, output_root=args.output_root,
+                allow_review_required=args.allow_review_required, operator_reason=args.operator_reason,
             )
-            print(
-                f"Generated release scripts: {result.destination}"
-                if result.created
-                else f"SKIPPED / RELEASE OWNED: {result.destination}. No files changed."
-            )
+            print(f"Generated release scripts: {result.destination}" if result.created else f"SKIPPED / RELEASE OWNED: {result.destination}. No files changed.")
             return
 
         errors = validate_project_tree(args.project_root)
