@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .execution_model import load_version_execution, validate_execution_model
 from .pipeline_sql import build_names, render_release_sql
 from .scaffold import _load_raw_contract, render_implementation_files
 from .source_management import load_source_manifest
@@ -56,6 +57,10 @@ def scaffold_version(
     source_id: str,
     dataset_id: str,
     version: str,
+    execution_model: str = "stream_task",
+    target_lag: str | None = None,
+    warehouse: str | None = None,
+    refresh_mode: str | None = None,
     template_root: Path | None = None,
 ) -> ScaffoldVersionResult:
     project_root = project_root.resolve()
@@ -63,6 +68,7 @@ def scaffold_version(
     if number == 1:
         raise ValueError("v1 is the initial dataset implementation; scaffold candidate versions from v2 onward")
     manifest, _, pattern, raw_contract = _dataset_context(project_root, source_id, dataset_id)
+    validate_execution_model(pattern, execution_model)
     dataset_root = project_root / "silver_processing" / source_id / dataset_id
     pipeline_file = dataset_root / "pipeline.yml"
     if not pipeline_file.is_file():
@@ -90,6 +96,10 @@ def scaffold_version(
         candidate=True,
         include_pipeline=False,
         template_root=template_root,
+        execution_model=execution_model,
+        target_lag=target_lag,
+        warehouse=warehouse,
+        refresh_mode=refresh_mode,
     )
     destination.mkdir(parents=True, exist_ok=False)
     for filename, text in rendered.items():
@@ -152,12 +162,19 @@ def generate_release_scripts(
     _require_version_implementation(project_root, source_id, dataset_id, to_version)
     _, _, pattern, raw_contract = _dataset_context(project_root, source_id, dataset_id)
     contract = _load_raw_contract(project_root, raw_contract, source_id)
+    from_execution = load_version_execution(
+        project_root, source_id, dataset_id, from_version, pattern=pattern
+    )
+    to_execution = load_version_execution(
+        project_root, source_id, dataset_id, to_version, pattern=pattern
+    )
     names_from = build_names(
         source_id=source_id,
         dataset_id=dataset_id,
         pattern=pattern,
         entity=str(contract["entity"]),
         version=from_version,
+        execution_model=from_execution.execution_model,
     )
     names_to = build_names(
         source_id=source_id,
@@ -165,6 +182,7 @@ def generate_release_scripts(
         pattern=pattern,
         entity=str(contract["entity"]),
         version=to_version,
+        execution_model=to_execution.execution_model,
     )
     activate, rollback = render_release_sql(pattern, names_from, names_to)
     root = (output_root or project_root / "operations" / "release").resolve()
@@ -183,8 +201,10 @@ def generate_release_scripts(
     readme = (
         f"# Release {source_id}.{dataset_id}: {from_version} -> {to_version}\n\n"
         "These scripts are generated for review and explicit execution. They are never run by `esf`.\n\n"
+        f"From execution model: `{from_execution.execution_model}`  \n"
+        f"To execution model: `{to_execution.execution_model}`\n\n"
         "1. Deploy the candidate version.\n"
-        "2. Bootstrap/replay historical Bronze evidence where required.\n"
+        "2. Bootstrap/replay or refresh historical Bronze evidence as appropriate for its execution model.\n"
         "3. Run candidate validation and active-vs-candidate comparison.\n"
         "4. Review and run `activate.sql`.\n"
         "5. Keep `rollback.sql` for the approved rollback window.\n"
