@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 from pathlib import Path
 
 from .migration_deployment import (
@@ -28,6 +29,24 @@ def _add_identity_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-git-sha", required=True)
     parser.add_argument("--framework-git-sha", required=True)
     parser.add_argument("--github-run-id", default=os.environ.get("GITHUB_RUN_ID"))
+
+
+def _verify_project_checkout(project_root: Path, expected_sha: str) -> Path:
+    project_root = project_root.resolve()
+    completed = subprocess.run(
+        ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise ValueError(f"project root is not a readable Git checkout: {project_root}")
+    actual = completed.stdout.strip()
+    if actual != expected_sha:
+        raise ValueError(
+            f"project checkout SHA does not match --project-git-sha: expected {expected_sha}, got {actual}"
+        )
+    return project_root
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -75,12 +94,21 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _build_parser().parse_args()
     try:
+        identity = _identity(args)
+        identity.validate()
+        project_root = _verify_project_checkout(args.project_root, identity.project_git_sha)
+
+        selected_framework_sha = os.environ.get("ESF_FRAMEWORK_GIT_SHA")
+        if selected_framework_sha and selected_framework_sha != identity.framework_git_sha:
+            raise ValueError(
+                "--framework-git-sha does not match ESF_FRAMEWORK_GIT_SHA selected by the deployment workflow"
+            )
+
         client = SnowCliClient()
         store = SnowflakeHistoryStore(client)
-        identity = _identity(args)
 
         if args.command == "deploy":
-            result = deploy_migrations(args.project_root, identity, store, client)
+            result = deploy_migrations(project_root, identity, store, client)
             print("Apply-once migration deployment complete.")
             print(f"Applied: {len(result.applied)}")
             for path in result.applied:
@@ -92,7 +120,7 @@ def main() -> None:
 
         if args.command == "baseline":
             paths = baseline_existing_migrations(
-                args.project_root,
+                project_root,
                 identity,
                 store,
                 reason=args.reason,
@@ -106,7 +134,7 @@ def main() -> None:
 
         if args.command == "resolve":
             path = remediate_migration(
-                args.project_root,
+                project_root,
                 identity,
                 store,
                 migration_path=args.migration_path,
