@@ -6,6 +6,7 @@ from .pipeline_idempotency import (
     IDEMPOTENCY_DECLARATIONS,
     render_deduped_relation,
     render_idempotency_conflict_guard,
+    render_identity_join,
 )
 from .pipeline_model import (
     PipelineNames,
@@ -114,7 +115,7 @@ def _render_append_replay(names: PipelineNames, contract: dict[str, Any]) -> str
     timestamp_column = _replay_timestamp(contract)
     row_filter = _range_filter(timestamp_column)
     new_defs = _column_defs(contract)
-    dedup = _join("T", "N", idempotency)
+    dedup = render_identity_join("T", "N", idempotency)
     conflict_guard = render_idempotency_conflict_guard(
         "ESF_REPLAY_INPUT",
         identity_columns=idempotency,
@@ -299,7 +300,7 @@ def _render_scd2_replay(names: PipelineNames, contract: dict[str, Any]) -> str:
     event_identity = [*idempotency, "ESF_STREAM_ACTION"]
     event_payload = [*columns, "ESF_STREAM_ACTION", "ESF_STREAM_ISUPDATE"]
     new_defs = _column_defs(contract)
-    dedup = _join("E", "N", idempotency) + " AND E.ESF_STREAM_ACTION = N.ESF_STREAM_ACTION"
+    dedup = render_identity_join("E", "N", event_identity)
     conflict_guard = render_idempotency_conflict_guard(
         "ESF_REPLAY_INPUT",
         identity_columns=event_identity,
