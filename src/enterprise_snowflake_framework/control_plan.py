@@ -14,6 +14,8 @@ KNOWN_CONTROL_SQL = (
     "control_plane/sql/060_run_evidence_api.sql",
     "control_plane/sql/070_enterprise_health_export.sql",
     "control_plane/sql/080_data_quality_reconciliation.sql",
+    "control_plane/sql/090_dataset_execution_model.sql",
+    "control_plane/sql/100_dynamic_table_observability.sql",
 )
 
 
@@ -31,7 +33,6 @@ class ControlPlan:
 
     @property
     def ready(self) -> bool:
-        """Preserve the original control-plan meaning: all known upgrade files are present and listed."""
         return not self.known_files_missing and not self.missing_from_manifest
 
 

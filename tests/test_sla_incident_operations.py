@@ -77,6 +77,8 @@ class SlaIncidentOperationTests(unittest.TestCase):
             "060_run_evidence_api.sql",
             "070_enterprise_health_export.sql",
             "080_data_quality_reconciliation.sql",
+            "090_dataset_execution_model.sql",
+            "100_dynamic_table_observability.sql",
         }
         actual = {path.name for path in (self.root / "control_plane" / "sql").glob("*.sql")}
         self.assertEqual(expected, actual)
@@ -100,6 +102,8 @@ class SlaIncidentOperationTests(unittest.TestCase):
             "060_run_evidence_api.sql",
             "070_enterprise_health_export.sql",
             "080_data_quality_reconciliation.sql",
+            "090_dataset_execution_model.sql",
+            "100_dynamic_table_observability.sql",
         ):
             (self.root / "control_plane" / "sql" / name).unlink()
 
@@ -116,6 +120,8 @@ class SlaIncidentOperationTests(unittest.TestCase):
                 "control_plane/sql/060_run_evidence_api.sql",
                 "control_plane/sql/070_enterprise_health_export.sql",
                 "control_plane/sql/080_data_quality_reconciliation.sql",
+                "control_plane/sql/090_dataset_execution_model.sql",
+                "control_plane/sql/100_dynamic_table_observability.sql",
             ),
             plan.missing_from_manifest,
         )

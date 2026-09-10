@@ -166,8 +166,13 @@ class PatternRepairCoverageTests(unittest.TestCase):
 
     def test_custom_repair_stays_domain_authored(self) -> None:
         v1 = self._dataset("special_case", "custom")
-        replay = (v1 / "015_replay.sql").read_text(encoding="utf-8")
-        self.assertIn("custom replay is domain-owned", replay)
+        version = yaml.safe_load((v1 / "version.yml").read_text(encoding="utf-8"))
+        self.assertEqual("custom", version["version"]["execution_model"])
+        self.assertFalse((v1 / "015_replay.sql").exists())
+        self.assertIn(
+            "custom pipeline objects",
+            (v1 / "001_objects.sql").read_text(encoding="utf-8"),
+        )
         with self.assertRaises(ValueError):
             generate_silver_repair_scripts(
                 project_root=self.root,

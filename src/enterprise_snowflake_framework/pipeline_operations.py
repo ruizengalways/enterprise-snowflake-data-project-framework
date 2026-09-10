@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from .execution_model import VersionExecution, render_version_yaml as _render_version_yaml
 from .pipeline_model import PipelineNames
 
 
 def render_task_sql(pattern: str, names: PipelineNames, project_code: str) -> str:
-    if pattern == "custom":
+    if names.execution_model != "stream_task":
+        raise ValueError("Task SQL is only valid for execution_model=stream_task")
+    if pattern == "custom" or not names.task:
         return (
             f"-- {names.dataset_key} {names.version}: custom task/orchestration.\n"
             "-- Use a Snowflake Task only when it fits this dataset's readiness model.\n"
@@ -15,6 +18,7 @@ def render_task_sql(pattern: str, names: PipelineNames, project_code: str) -> st
         if names.stream
         else "-- No readiness signal is assumed. Add SCHEDULE/AFTER/control-event wiring before activation."
     )
+    assert names.apply_procedure and names.validate_procedure
     return f"""{readiness}
 -- This version owns a new task name. CREATE is intentionally fail-closed: an unexpected
 -- pre-existing task is an ownership conflict and must not be silently replaced or suspended.
@@ -56,15 +60,19 @@ def render_register_sql(pattern: str, names: PipelineNames, *, owner: str, candi
         else f"D.ACTIVE_VERSION = COALESCE(D.ACTIVE_VERSION, '{names.version}'),"
     )
     version_status = "DEPLOYED" if candidate else "ACTIVE"
-    if pattern == "custom":
-        apply_value = "NULL"
-        task_value = "NULL"
-        stream_value = "NULL"
+    apply_value = f"'{names.apply_procedure}'" if names.apply_procedure else "NULL"
+    task_value = f"'{names.task}'" if names.task else "NULL"
+    stream_value = f"'{names.stream}'" if names.stream else "NULL"
+    if names.execution_model == "dynamic_table":
+        primary_runtime = f"'{names.dynamic_table}'"
+    elif names.execution_model == "stream_task":
+        primary_runtime = task_value
+    elif names.execution_model == "batch_sql":
+        primary_runtime = apply_value
     else:
-        apply_value = f"'{names.apply_procedure}'"
-        task_value = f"'{names.task}'"
-        stream_value = "NULL" if names.stream is None else f"'{names.stream}'"
+        primary_runtime = "NULL"
     return f"""-- Register operational identity. This does not route transformation logic.
+-- PATTERN belongs to the logical dataset; EXECUTION_MODEL belongs to this implementation version.
 MERGE INTO CONTROL.DATASET D
 USING (
     SELECT
@@ -107,13 +115,15 @@ WHEN MATCHED THEN UPDATE SET
     V.APPLY_OBJECT = {apply_value},
     V.TASK_OBJECT = {task_value},
     V.STREAM_OBJECT = {stream_value},
+    V.EXECUTION_MODEL = '{names.execution_model}',
+    V.PRIMARY_RUNTIME_OBJECT = {primary_runtime},
     V.UPDATED_AT = CURRENT_TIMESTAMP()
 WHEN NOT MATCHED THEN INSERT (
     DATASET_ID, VERSION, STATUS, HISTORY_RELATION, CURRENT_RELATION,
-    APPLY_OBJECT, TASK_OBJECT, STREAM_OBJECT, DEPLOYED_AT
+    APPLY_OBJECT, TASK_OBJECT, STREAM_OBJECT, EXECUTION_MODEL, PRIMARY_RUNTIME_OBJECT, DEPLOYED_AT
 ) VALUES (
     S.DATASET_ID, S.VERSION, S.STATUS, {history}, {current},
-    {apply_value}, {task_value}, {stream_value}, CURRENT_TIMESTAMP()
+    {apply_value}, {task_value}, {stream_value}, '{names.execution_model}', {primary_runtime}, CURRENT_TIMESTAMP()
 );
 """
 
@@ -154,28 +164,26 @@ def render_deploy_fragment(names: PipelineNames, *, candidate: bool) -> str:
     base = f"silver_processing/{names.source_id}/{names.dataset_id}"
     if candidate:
         base += f"/versions/{names.version}"
-    paths = [
-        f"{base}/001_objects.sql",
-        f"{base}/010_apply.sql",
-        f"{base}/015_replay.sql",
-        f"{base}/020_validate.sql",
-        f"{base}/030_task.sql",
-        f"{base}/040_register.sql",
-    ]
+    if names.execution_model == "dynamic_table":
+        filenames = ["001_dynamic_table.sql", "020_validate.sql", "040_register.sql"]
+    elif names.execution_model == "batch_sql":
+        filenames = ["001_objects.sql", "010_apply.sql", "015_replay.sql", "020_validate.sql", "040_register.sql"]
+    elif names.execution_model == "custom":
+        filenames = ["001_objects.sql", "040_register.sql"]
+    else:
+        filenames = ["001_objects.sql", "010_apply.sql", "015_replay.sql", "020_validate.sql", "030_task.sql", "040_register.sql"]
     if not candidate:
-        paths.append(f"{base}/050_publish.sql")
-    return "\n".join(paths) + "\n"
+        filenames.append("050_publish.sql")
+    return "\n".join(f"{base}/{name}" for name in filenames) + "\n"
 
 
-def render_version_yaml(names: PipelineNames, *, candidate: bool) -> str:
-    initial = "development" if candidate else "active"
-    return (
-        "schema_version: 1\n\n"
-        "version:\n"
-        f"  dataset: {names.dataset_key}\n"
-        f"  id: {names.version}\n"
-        f"  initial_status: {initial}\n"
-        "  activation: explicit\n"
+def render_version_yaml(names: PipelineNames, *, candidate: bool, execution: VersionExecution | None = None) -> str:
+    execution = execution or VersionExecution(names.execution_model)
+    return _render_version_yaml(
+        dataset_key=names.dataset_key,
+        version=names.version,
+        candidate=candidate,
+        execution=execution,
     )
 
 
@@ -193,26 +201,47 @@ WHERE IS_ACTIVE = TRUE;"""
 SELECT * FROM {names.physical_relation};"""
 
 
+def _prepare_runtime(names: PipelineNames) -> str:
+    if names.execution_model == "stream_task":
+        if names.stream and names.task:
+            return f"""-- Candidate processing is started before publication. If publication later fails,
+-- the previous implementation still serves consumers and continues processing.
+ALTER TASK {names.task} RESUME;
+"""
+        return "-- Stream/Task implementation has no automatic readiness schedule; ensure candidate data is current before publication.\n"
+    if names.execution_model == "dynamic_table":
+        assert names.dynamic_table
+        return f"""-- Force a candidate refresh before switching the stable consumer view.
+-- TARGET_LAG remains a best-effort staleness target rather than a release gate.
+ALTER DYNAMIC TABLE {names.dynamic_table} REFRESH;
+"""
+    if names.execution_model == "batch_sql":
+        return "-- Batch SQL implementation has no scheduler. Run its reviewed apply/validate path before publication.\n"
+    return "-- Custom implementation: complete the domain-owned readiness action before publication.\n"
+
+
+def _retire_runtime(names: PipelineNames) -> str:
+    if names.execution_model == "stream_task" and names.task:
+        return f"ALTER TASK {names.task} SUSPEND;"
+    if names.execution_model == "dynamic_table" and names.dynamic_table:
+        return f"ALTER DYNAMIC TABLE {names.dynamic_table} SUSPEND;"
+    if names.execution_model == "batch_sql":
+        return "-- Batch SQL implementation has no scheduler to suspend."
+    return "-- Custom implementation: retire the domain-owned runtime explicitly."
+
+
 def render_release_sql(pattern: str, names_from: PipelineNames, names_to: PipelineNames) -> tuple[str, str]:
     if pattern == "custom":
         raise ValueError("custom pipelines require domain-authored activation and rollback SQL")
 
     def script(old: PipelineNames, new: PipelineNames) -> str:
-        if new.stream:
-            prepare_new = f"""-- Candidate processing is started before publication. If publication later fails,
--- the previous implementation still serves consumers and continues processing.
-ALTER TASK {new.task} RESUME;
-"""
-        else:
-            prepare_new = (
-                f"-- {new.task} has no readiness schedule by default. Ensure the candidate snapshot is\n"
-                "-- already rebuilt and validated before publication; no implicit task activation is attempted.\n"
-            )
+        prepare_new = _prepare_runtime(new)
         publish_sql = _published_replacement(pattern, new)
-        return f"""-- Explicit cutover: {new.dataset_key} {old.version} -> {new.version}
+        retire_old = _retire_runtime(old)
+        return f"""-- Explicit cutover: {new.dataset_key} {old.version} ({old.execution_model}) -> {new.version} ({new.execution_model})
 -- Review VERSION_VALIDATION and candidate DQ evidence before running. This file is never auto-executed by scaffold.
 -- Stable consumer views use COPY GRANTS so explicit non-OWNERSHIP privileges survive replacement.
--- Snowflake DDL commits independently. If a later step fails, keep the old task running, inspect state,
+-- Snowflake DDL commits independently. If a later step fails, keep the old runtime available, inspect state,
 -- and use the generated rollback/corrective operation rather than blindly retrying partial cutover SQL.
 
 {prepare_new}
@@ -230,9 +259,9 @@ UPDATE CONTROL.DATASET_VERSION
 SET STATUS = 'RETIRED', RETIRED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP()
 WHERE DATASET_ID = '{new.dataset_key}' AND VERSION = '{old.version}';
 
--- Retire old processing last. An earlier publication/control failure must not suspend the
--- previously active pipeline as its first side effect.
-ALTER TASK {old.task} SUSPEND;
+-- Retire old processing last. An earlier publication/control failure must not stop the
+-- previously active implementation as its first side effect.
+{retire_old}
 """
 
     return script(names_from, names_to), script(names_to, names_from)

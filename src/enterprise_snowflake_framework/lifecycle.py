@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .execution_model import load_version_execution
 from .pipeline_sql import build_names
 from .scaffold import _load_raw_contract
 from .source_management import load_source_manifest
@@ -36,11 +37,29 @@ def _context(project_root: Path, source_id: str, dataset_id: str) -> tuple[str, 
     return pattern, raw_contract, contract
 
 
-def _task_sql(action: str, task: str, pattern: str) -> str:
-    if pattern == "custom":
-        return "-- CUSTOM pipeline: pause/resume the domain-owned orchestrator explicitly here.\n"
+def _runtime_lifecycle_sql(action: str, names) -> str:
     verb = "SUSPEND" if action == "pause" else "RESUME"
-    return f"ALTER TASK {task} {verb};\n"
+    if names.execution_model == "stream_task":
+        if not names.task:
+            return "-- Stream/Task implementation has no generated Task; manage readiness explicitly.\n"
+        return f"ALTER TASK {names.task} {verb};\n"
+    if names.execution_model == "dynamic_table":
+        if not names.dynamic_table:
+            raise ValueError("dynamic_table implementation has no runtime relation")
+        return f"ALTER DYNAMIC TABLE {names.dynamic_table} {verb};\n"
+    if names.execution_model == "batch_sql":
+        return "-- Batch SQL has no Framework-owned scheduler to pause/resume. Coordinate the external scheduler explicitly.\n"
+    return "-- CUSTOM pipeline: pause/resume the domain-owned orchestrator explicitly here.\n"
+
+
+def _retire_runtime_sql(names) -> str:
+    if names.execution_model == "stream_task" and names.task:
+        return f"ALTER TASK {names.task} SUSPEND;"
+    if names.execution_model == "dynamic_table" and names.dynamic_table:
+        return f"ALTER DYNAMIC TABLE {names.dynamic_table} SUSPEND;"
+    if names.execution_model == "batch_sql":
+        return f"-- {names.version}: batch_sql has no Framework-owned scheduler to suspend."
+    return f"-- {names.version}: custom runtime; stop its domain-owned orchestrator manually."
 
 
 def generate_lifecycle_scripts(
@@ -75,39 +94,39 @@ def generate_lifecycle_scripts(
         validate_version(version)
         if version not in existing_versions(project_root, source_id, dataset_id):
             raise FileNotFoundError(f"version implementation not found: {source_id}.{dataset_id} {version}")
+        execution = load_version_execution(project_root, source_id, dataset_id, version, pattern=pattern)
         names = build_names(
             source_id=source_id,
             dataset_id=dataset_id,
             pattern=pattern,
             entity=entity,
             version=version,
+            execution_model=execution.execution_model,
         )
-        task = _task_sql(action, names.task, pattern)
+        runtime_sql = _runtime_lifecycle_sql(action, names)
         enabled = "FALSE" if action == "pause" else "TRUE"
         lifecycle_status = "PAUSED" if action == "pause" else "ACTIVE"
         sql = f"""-- {action.upper()} logical dataset {dataset_key} using explicit implementation {version}.
+-- Execution model: {execution.execution_model}
 -- Generated for review. `esf` does not execute this file.
--- Requires CONTROL lifecycle migration 050_dataset_lifecycle_status.sql.
--- If the domain changed task/orchestrator names after scaffolding, edit this script before execution.
+-- Requires CONTROL migrations 050_dataset_lifecycle_status.sql and 090_dataset_execution_model.sql.
 
-{task}
+{runtime_sql}
 UPDATE CONTROL.DATASET
 SET ENABLED = {enabled},
     LIFECYCLE_STATUS = '{lifecycle_status}',
     UPDATED_AT = CURRENT_TIMESTAMP()
 WHERE DATASET_ID = '{dataset_key}';
 
--- Re-evaluate health after the approved lifecycle change.
 CALL CONTROL.EVALUATE_DOMAIN_HEALTH();
 """
         readme = f"""# {action.title()} {dataset_key}
 
 Operation id: `{operation_id}`  
-Implementation: `{version}`
+Implementation: `{version}`  
+Execution model: `{execution.execution_model}`
 
 Review `operation.sql` before execution. This directory is immutable from the Framework's perspective after creation.
-
-For `resume`, confirm the selected version is the intended active implementation and that its Task/readiness model is valid before running the SQL.
 """
     else:
         if version is not None:
@@ -117,20 +136,18 @@ For `resume`, confirm the selected version is the intended active implementation
             raise FileNotFoundError(f"dataset implementation not found: {source_id}.{dataset_id}")
         suspends: list[str] = []
         for item in versions:
+            execution = load_version_execution(project_root, source_id, dataset_id, item, pattern=pattern)
             names = build_names(
                 source_id=source_id,
                 dataset_id=dataset_id,
                 pattern=pattern,
                 entity=entity,
                 version=item,
+                execution_model=execution.execution_model,
             )
-            if pattern == "custom":
-                suspends.append(f"-- {item}: CUSTOM pipeline; stop its domain-owned orchestrator manually.")
-            else:
-                suspends.append(f"ALTER TASK {names.task} SUSPEND;")
+            suspends.append(_retire_runtime_sql(names))
         sql = f"""-- SOFT DECOMMISSION logical dataset {dataset_key}.
 -- Generated for review. `esf` does not execute this file.
--- Requires CONTROL lifecycle migration 050_dataset_lifecycle_status.sql.
 -- This intentionally does NOT DROP Silver history, published views, Bronze, or control-plane audit rows.
 -- Physical cleanup is a separate approved retention/governance action.
 
@@ -156,15 +173,14 @@ CALL CONTROL.EVALUATE_DOMAIN_HEALTH();
 -- DROP TABLE ...
 -- DROP VIEW ...
 -- DROP STREAM ...
+-- DROP DYNAMIC TABLE ...
 -- DELETE FROM CONTROL ...
 """
         readme = f"""# Soft decommission {dataset_key}
 
 Operation id: `{operation_id}`
 
-This is phase 1 of decommission only: stop processing and mark the logical dataset `DECOMMISSIONED` while preserving published data and audit evidence.
-
-After the agreed retention/rollback window, perform physical cleanup in a separately reviewed change. Do not combine destructive cleanup with the initial decommission cutover.
+This is phase 1 of decommission only: stop every known version according to its execution model and mark the logical dataset `DECOMMISSIONED` while preserving published data and audit evidence.
 """
 
     destination.mkdir(parents=True, exist_ok=False)

@@ -141,30 +141,65 @@ def build_certification_project(root: Path, fixture_path: Path) -> Certification
     )
 
 
-def add_scd2_candidate(project: CertificationProject, version: str = "v2") -> CertificationProject:
-    datasets = project.fixture["datasets"]
+def _single_dataset_for_pattern(project: CertificationProject, pattern: str) -> str:
     matches = [
         str(dataset_id)
-        for dataset_id, spec in datasets.items()
-        if isinstance(spec, dict) and spec.get("pattern") == "scd2"
+        for dataset_id, spec in project.fixture["datasets"].items()
+        if isinstance(spec, dict) and spec.get("pattern") == pattern
     ]
     if len(matches) != 1:
-        raise ValueError("canonical certification fixture must contain exactly one scd2 dataset")
-    dataset_id = matches[0]
+        raise ValueError(f"canonical certification fixture must contain exactly one {pattern} dataset")
+    return matches[0]
+
+
+def _add_candidate(
+    project: CertificationProject,
+    *,
+    pattern: str,
+    version: str,
+    execution_model: str,
+) -> CertificationProject:
+    dataset_id = _single_dataset_for_pattern(project, pattern)
     destination = scaffold_version(
         project_root=project.root,
         source_id=project.source_id,
         dataset_id=dataset_id,
         version=version,
+        execution_model=execution_model,
+        target_lag="1 minute" if execution_model == "dynamic_table" else None,
+        refresh_mode="incremental" if execution_model == "dynamic_table" else None,
     ).destination
     _append_fragment(
         project.root / "silver_processing" / "deploy_manifest.txt",
         destination / "deploy_manifest.fragment.txt",
     )
-    project_sha = _commit(project.root, f"certification fixture {dataset_id} {version}")
+    project_sha = _commit(
+        project.root,
+        f"certification fixture {dataset_id} {version} {execution_model}",
+    )
     return CertificationProject(
         root=project.root,
         fixture=project.fixture,
         source_id=project.source_id,
         project_git_sha=project_sha,
+    )
+
+
+def add_scd2_candidate(project: CertificationProject, version: str = "v2") -> CertificationProject:
+    return _add_candidate(
+        project,
+        pattern="scd2",
+        version=version,
+        execution_model="stream_task",
+    )
+
+
+def add_scd1_dynamic_table_candidate(
+    project: CertificationProject, version: str = "v2"
+) -> CertificationProject:
+    return _add_candidate(
+        project,
+        pattern="scd1",
+        version=version,
+        execution_model="dynamic_table",
     )

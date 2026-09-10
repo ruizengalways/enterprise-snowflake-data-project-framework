@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from .dynamic_table import render_dynamic_table_sql, render_dynamic_table_validation_sql
+from .execution_model import VersionExecution, default_execution_model, validate_execution_model
 from .pipeline_sql import (
     build_names,
     render_apply_sql,
@@ -17,10 +19,10 @@ from .pipeline_sql import (
     render_register_sql,
     render_replay_sql,
     render_task_sql,
-    render_validate_sql,
     render_version_yaml,
+    render_validate_sql,
 )
-from .plan import STANDARD_DATASET_FILES, SourcePlan, build_source_plan
+from .plan import SourcePlan, build_source_plan, standard_dataset_files
 from .source_management import load_source_manifest
 
 SUPPORTED_PATTERNS = {"append", "full_refresh", "scd1", "scd2", "custom"}
@@ -126,6 +128,7 @@ def _pipeline_yaml(
         pattern=pattern,
         entity=str(contract["entity"]),
         version="v1",
+        execution_model=default_execution_model(pattern),
     )
     lines = [
         "schema_version: 1",
@@ -162,7 +165,7 @@ def _pipeline_yaml(
 
 def _render_readme(
     *, pattern: str, dataset_id: str, source_id: str, version: str, candidate: bool,
-    template_root: Path | None,
+    execution_model: str, template_root: Path | None,
 ) -> str:
     root = (template_root or _repo_template_root()).resolve()
     path = root / pattern / "README.md"
@@ -173,43 +176,85 @@ def _render_readme(
         text = f"# {dataset_id} — {pattern}\n"
     suffix = (
         f"\n## Implementation version\n\n`{version}` is a {'candidate' if candidate else 'initial'} "
-        "implementation. SQL in this directory is domain-owned after creation.\n"
+        f"implementation using `{execution_model}`. Semantic pattern remains `{pattern}`. "
+        "SQL in this directory is domain-owned after creation.\n"
     )
     return text.rstrip() + "\n" + suffix
+
+
+def _execution_config(
+    *, pattern: str, execution_model: str | None, project_code: str,
+    target_lag: str | None, warehouse: str | None, refresh_mode: str | None,
+) -> VersionExecution:
+    model = execution_model or default_execution_model(pattern)
+    validate_execution_model(pattern, model)
+    if model != "dynamic_table":
+        return VersionExecution(model)
+    lag = (target_lag or "5 minutes").strip()
+    wh = (warehouse or f"WH_{project_code}_TRANSFORM").strip().upper()
+    mode = (refresh_mode or "incremental").strip().lower()
+    if not lag:
+        raise ValueError("dynamic_table target_lag must not be empty")
+    if mode not in {"incremental", "full"}:
+        raise ValueError("dynamic_table refresh_mode must be incremental or full")
+    if not wh or not wh.replace("_", "A").isalnum() or not wh[0].isalpha():
+        raise ValueError("dynamic_table warehouse must be an unquoted Snowflake identifier")
+    return VersionExecution(model, target_lag=lag, warehouse=wh, refresh_mode=mode)
 
 
 def render_implementation_files(
     *, project_root: Path, source_id: str, dataset_id: str, pattern: str,
     raw_contract: str, version: str, owner: str, candidate: bool,
     include_pipeline: bool, template_root: Path | None = None,
+    execution_model: str | None = None, target_lag: str | None = None,
+    warehouse: str | None = None, refresh_mode: str | None = None,
 ) -> dict[str, str]:
     if pattern not in SUPPORTED_PATTERNS:
         raise ValueError(f"unsupported scaffold pattern: {pattern}")
     contract = _load_raw_contract(project_root, raw_contract, source_id)
+    project_code = _project_code(project_root)
+    execution = _execution_config(
+        pattern=pattern, execution_model=execution_model, project_code=project_code,
+        target_lag=target_lag, warehouse=warehouse, refresh_mode=refresh_mode,
+    )
     names = build_names(
         source_id=source_id,
         dataset_id=dataset_id,
         pattern=pattern,
         entity=str(contract["entity"]),
         version=version,
+        execution_model=execution.execution_model,
     )
-    rendered = {
+    rendered: dict[str, str] = {
         "README.md": _render_readme(
             pattern=pattern, dataset_id=dataset_id, source_id=source_id,
-            version=version, candidate=candidate, template_root=template_root,
+            version=version, candidate=candidate, execution_model=execution.execution_model,
+            template_root=template_root,
         ),
-        "version.yml": render_version_yaml(names, candidate=candidate),
-        "001_objects.sql": render_objects_sql(pattern, names, contract),
-        "010_apply.sql": render_apply_sql(pattern, names, contract),
-        "015_replay.sql": render_replay_sql(pattern, names, contract),
-        "020_validate.sql": render_validate_sql(pattern, names, contract),
+        "version.yml": render_version_yaml(names, candidate=candidate, execution=execution),
         "025_compare.sql": render_compare_sql(pattern, names, contract, candidate=candidate),
-        "030_task.sql": render_task_sql(pattern, names, _project_code(project_root)),
         "040_register.sql": render_register_sql(pattern, names, owner=owner, candidate=candidate),
         "050_publish.sql": render_publish_sql(pattern, names, candidate=candidate),
         "060_policy.sql": render_policy_sql(names, candidate=candidate),
         "deploy_manifest.fragment.txt": render_deploy_fragment(names, candidate=candidate),
     }
+    if execution.execution_model == "dynamic_table":
+        assert execution.target_lag and execution.warehouse and execution.refresh_mode
+        rendered["001_dynamic_table.sql"] = render_dynamic_table_sql(
+            pattern, names, contract,
+            target_lag=execution.target_lag,
+            warehouse=execution.warehouse,
+            refresh_mode=execution.refresh_mode,
+        )
+        rendered["020_validate.sql"] = render_dynamic_table_validation_sql(pattern, names, contract)
+    else:
+        rendered["001_objects.sql"] = render_objects_sql(pattern, names, contract)
+        if execution.execution_model in {"stream_task", "batch_sql"}:
+            rendered["010_apply.sql"] = render_apply_sql(pattern, names, contract)
+            rendered["015_replay.sql"] = render_replay_sql(pattern, names, contract)
+            rendered["020_validate.sql"] = render_validate_sql(pattern, names, contract)
+        if execution.execution_model == "stream_task":
+            rendered["030_task.sql"] = render_task_sql(pattern, names, project_code)
     if include_pipeline:
         rendered["pipeline.yml"] = _pipeline_yaml(pattern, source_id, dataset_id, raw_contract, contract)
     return rendered
@@ -226,6 +271,8 @@ def _dataset_config(project_root: Path, source_id: str, dataset_id: str) -> tupl
 def _prepare_dataset(
     *, project_root: Path, source_id: str, pattern: str, dataset_id: str,
     raw_contract: str, owner: str, template_root: Path | None = None,
+    execution_model: str | None = None, target_lag: str | None = None,
+    warehouse: str | None = None, refresh_mode: str | None = None,
 ) -> tuple[Path, dict[str, str]]:
     project_root = project_root.resolve()
     destination = project_root / "silver_processing" / source_id / dataset_id
@@ -235,6 +282,8 @@ def _prepare_dataset(
         project_root=project_root, source_id=source_id, dataset_id=dataset_id,
         pattern=pattern, raw_contract=raw_contract, version="v1", owner=owner,
         candidate=False, include_pipeline=True, template_root=template_root,
+        execution_model=execution_model, target_lag=target_lag,
+        warehouse=warehouse, refresh_mode=refresh_mode,
     )
     return destination, rendered
 
@@ -246,7 +295,9 @@ def _write_prepared(destination: Path, rendered: dict[str, str]) -> None:
 
 
 def scaffold_preview(
-    *, project_root: Path, source_id: str, dataset_id: str, template_root: Path | None = None
+    *, project_root: Path, source_id: str, dataset_id: str, template_root: Path | None = None,
+    execution_model: str | None = None, target_lag: str | None = None,
+    warehouse: str | None = None, refresh_mode: str | None = None,
 ) -> ScaffoldPreviewResult:
     project_root = project_root.resolve()
     manifest, config = _dataset_config(project_root, source_id, dataset_id)
@@ -265,6 +316,8 @@ def scaffold_preview(
         pattern=pattern, raw_contract=raw_contract, version="v1",
         owner=str(manifest["source"]["owner"]), candidate=False,
         include_pipeline=True, template_root=template_root,
+        execution_model=execution_model, target_lag=target_lag,
+        warehouse=warehouse, refresh_mode=refresh_mode,
     )
     return ScaffoldPreviewResult(
         source_id=source_id, dataset_id=dataset_id, pattern=pattern,
@@ -275,7 +328,9 @@ def scaffold_preview(
 
 def scaffold_pipeline(
     *, project_root: Path, source_id: str, pattern: str, dataset_id: str,
-    template_root: Path | None = None,
+    template_root: Path | None = None, execution_model: str | None = None,
+    target_lag: str | None = None, warehouse: str | None = None,
+    refresh_mode: str | None = None,
 ) -> ScaffoldDatasetResult:
     project_root = project_root.resolve()
     manifest, config = _dataset_config(project_root, source_id, dataset_id)
@@ -290,7 +345,7 @@ def scaffold_pipeline(
         raise ValueError(f"raw_contract is required for {source_id}.{dataset_id}")
     destination = project_root / "silver_processing" / source_id / dataset_id
     if destination.exists():
-        missing = tuple(name for name in STANDARD_DATASET_FILES if not (destination / name).is_file())
+        missing = tuple(name for name in standard_dataset_files(destination) if not (destination / name).is_file())
         return ScaffoldDatasetResult(
             source_id=source_id, dataset_id=dataset_id, pattern=pattern,
             destination=destination, created=False, missing_standard_files=missing,
@@ -299,6 +354,8 @@ def scaffold_pipeline(
         project_root=project_root, source_id=source_id, pattern=pattern,
         dataset_id=dataset_id, raw_contract=raw_contract,
         owner=str(manifest["source"]["owner"]), template_root=template_root,
+        execution_model=execution_model, target_lag=target_lag,
+        warehouse=warehouse, refresh_mode=refresh_mode,
     )
     _write_prepared(destination, rendered)
     return ScaffoldDatasetResult(

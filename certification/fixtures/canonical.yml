@@ -77,6 +77,8 @@ datasets:
         - {id: '1', value: C, source_updated_at: '2026-01-02 13:00:00', source_sequence: 5, source_operation: I, ingested_at: '2026-01-02 13:00:05 +00:00'}
       out_of_order:
         - {id: '1', value: OLD, source_updated_at: '2026-01-02 12:30:00', source_sequence: 6, source_operation: U, ingested_at: '2026-01-02 13:30:00 +00:00'}
+      dynamic_catchup:
+        - {id: '1', value: DYNAMIC, source_updated_at: '2026-01-02 14:00:00', source_sequence: 7, source_operation: U, ingested_at: '2026-01-02 14:00:05 +00:00'}
 
   scd2_customer:
     pattern: scd2

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enterprise-snowflake.example/schemas/version.schema.json",
+  "title": "Enterprise Snowflake Dataset Version v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "version"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataset", "id", "initial_status", "activation"],
+      "properties": {
+        "dataset": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}\\.[a-z][a-z0-9_]{1,63}$"},
+        "id": {"type": "string", "pattern": "^v[1-9][0-9]*$"},
+        "initial_status": {"enum": ["active", "development"]},
+        "activation": {"const": "explicit"},
+        "execution_model": {"enum": ["stream_task", "dynamic_table", "batch_sql", "custom"]},
+        "dynamic_table": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_lag", "warehouse", "refresh_mode"],
+          "properties": {
+            "target_lag": {"type": "string", "minLength": 1, "maxLength": 64},
+            "warehouse": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+            "refresh_mode": {"enum": ["incremental", "full"]}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"execution_model": {"const": "dynamic_table"}}, "required": ["execution_model"]},
+          "then": {"required": ["dynamic_table"]},
+          "else": {"not": {"required": ["dynamic_table"]}}
+        }
+      ]
+    }
+  }
+}
