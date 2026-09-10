@@ -67,7 +67,7 @@ class DdlSafetyReleaseTests(unittest.TestCase):
         self.assertIn("CREATE TABLE SILVER.FLEET_MSSQL_CUSTOMER_V2_EVENTS", objects)
         self.assertIn("CREATE TABLE SILVER.FLEET_MSSQL_CUSTOMER_V2_HISTORY", objects)
         self.assertIn("CREATE VIEW SILVER.FLEET_MSSQL_CUSTOMER_V2_CURRENT", objects)
-        self.assertIn("CREATE STREAM SILVER.FLEET_MSSQL_CUSTOMER_V2_STREAM", objects)
+        self.assertIn("CREATE STREAM BRONZE.FLEET_MSSQL_CUSTOMER_V2_STREAM", objects)
         self.assertNotIn("CREATE TABLE IF NOT EXISTS", objects)
         self.assertNotIn("CREATE STREAM IF NOT EXISTS", objects)
         self.assertNotIn("CREATE OR REPLACE VIEW", objects)
