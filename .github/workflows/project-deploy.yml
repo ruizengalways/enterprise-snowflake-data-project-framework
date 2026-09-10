@@ -34,9 +34,13 @@ jobs:
     name: Deploy ${{ inputs.project_code }} ${{ inputs.git_sha }} to ${{ inputs.environment }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    concurrency:
+      group: esf-deploy-${{ inputs.project_code }}-${{ inputs.environment }}
+      cancel-in-progress: false
     env:
       ESF_ENVIRONMENT: ${{ inputs.environment }}
       ESF_PROJECT_GIT_SHA: ${{ inputs.git_sha }}
+      ESF_FRAMEWORK_GIT_SHA: ${{ inputs.framework_ref }}
       DBT_AUTHENTICATOR: workload_identity
       DBT_DEFAULT_SCHEMA: GOLD_MARTS
       SNOWFLAKE_ENHANCED_EXIT_CODES: "1"
@@ -169,6 +173,8 @@ jobs:
           echo "DBT_ROLE=AR_${{ inputs.project_code }}_DEPLOY" >> "${GITHUB_ENV}"
           echo "DBT_WAREHOUSE=WH_${{ inputs.project_code }}_TRANSFORM" >> "${GITHUB_ENV}"
           echo "DBT_DATABASE=${env_upper}_${{ inputs.project_code }}" >> "${GITHUB_ENV}"
+          echo "ESF_SNOWFLAKE_AUTHENTICATOR=WORKLOAD_IDENTITY" >> "${GITHUB_ENV}"
+          echo "ESF_SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER=OIDC" >> "${GITHUB_ENV}"
 
       - name: Request account-scoped GitHub OIDC token
         shell: bash
@@ -192,41 +198,15 @@ jobs:
             --enable-templating NONE --local-only --enhanced-exit-codes \
             -q 'select current_database(), current_warehouse(), current_user(), current_role()'
 
-      - name: Deploy committed domain control-plane SQL in manifest order
+      - name: Apply committed CONTROL and SILVER migrations once
         shell: bash
         run: |
           set -euo pipefail
-          manifest="project/control_plane/deploy_manifest.txt"
-          while IFS= read -r raw || [[ -n "${raw}" ]]; do
-            path="${raw%%#*}"
-            path="$(printf '%s' "${path}" | xargs)"
-            [[ -z "${path}" ]] && continue
-            echo "Applying ${path}"
-            snow sql --temporary-connection \
-              --account "${SNOWFLAKE_ACCOUNT}" --user "${SNOWFLAKE_USER}" --role "${SNOWFLAKE_ROLE}" \
-              --warehouse "${SNOWFLAKE_WAREHOUSE}" --database "${SNOWFLAKE_DATABASE}" \
-              --authenticator WORKLOAD_IDENTITY --workload-identity-provider OIDC \
-              --enable-templating NONE --local-only --enhanced-exit-codes \
-              -f "project/${path}"
-          done < "${manifest}"
-
-      - name: Deploy committed Silver SQL in manifest order
-        shell: bash
-        run: |
-          set -euo pipefail
-          manifest="project/silver_processing/deploy_manifest.txt"
-          while IFS= read -r raw || [[ -n "${raw}" ]]; do
-            path="${raw%%#*}"
-            path="$(printf '%s' "${path}" | xargs)"
-            [[ -z "${path}" ]] && continue
-            echo "Applying ${path}"
-            snow sql --temporary-connection \
-              --account "${SNOWFLAKE_ACCOUNT}" --user "${SNOWFLAKE_USER}" --role "${SNOWFLAKE_ROLE}" \
-              --warehouse "${SNOWFLAKE_WAREHOUSE}" --database "${SNOWFLAKE_DATABASE}" \
-              --authenticator WORKLOAD_IDENTITY --workload-identity-provider OIDC \
-              --enable-templating NONE --local-only --enhanced-exit-codes \
-              -f "project/${path}"
-          done < "${manifest}"
+          esf-migrate deploy \
+            --project-root project \
+            --project-git-sha "${{ inputs.git_sha }}" \
+            --framework-git-sha "${{ inputs.framework_ref }}" \
+            --github-run-id "${GITHUB_RUN_ID}"
 
       - name: Verify dbt connection
         run: dbt debug --target "${{ inputs.environment }}" --project-dir "project/${{ inputs.project_dir }}" --profiles-dir "project/${{ inputs.project_dir }}"
