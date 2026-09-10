@@ -72,6 +72,8 @@ SILVER.FLEET_MSSQL_CUSTOMER_V2_TASK
 
 V1 and V2 therefore consume the same Bronze source independently.
 
+New version-owned persistent objects use create-only DDL. An unexpected pre-existing object is treated as an ownership conflict rather than silently replaced. See `DDL_SAFETY_AND_RELEASES.md`.
+
 ## Candidate lifecycle
 
 Recommended lifecycle:
@@ -146,22 +148,29 @@ operations/release/fleet_mssql/customer/v1_to_v2/
 
 The command does not connect to Snowflake and does not execute cutover.
 
-The generated activation script:
+The generated activation script is deliberately ordered for safer partial failure behavior:
 
-1. suspends the old task;
-2. repoints stable published view(s) to the candidate physical implementation;
-3. updates `CONTROL.DATASET_VERSION` and `CONTROL.DATASET`;
-4. resumes the new triggered task when the pattern has a Stream-based readiness model.
+1. starts the candidate triggered task when the pattern has a Stream-based readiness model;
+2. repoints stable published view(s) with `CREATE OR REPLACE VIEW ... COPY GRANTS`;
+3. updates `CONTROL.DATASET_VERSION` and `CONTROL.DATASET` to the new active version;
+4. marks the prior implementation retired;
+5. suspends the prior task last.
+
+The stable view is the intentional replace boundary. `COPY GRANTS` preserves explicit consumer privileges except OWNERSHIP. Candidate deployment itself never alters the stable view.
+
+The old task is not suspended as the first cutover side effect. If publication fails, the previously active implementation remains in service and continues processing. Snowflake DDL commits independently, so a partially completed cutover must be inspected and corrected or rolled back explicitly rather than treated as a single rollback-able transaction.
 
 Full-refresh/custom readiness remains domain-specific and is not guessed by the release generator.
 
 ## Rollback
 
-`rollback.sql` performs the inverse stable-view/control-state switch. A recently retired physical implementation should remain available for an approved rollback window. Rollback should not require rebuilding historical data during the cutover itself.
+`rollback.sql` performs the inverse stable-view/control-state switch and also uses grant-preserving published-view replacement. A recently retired physical implementation should remain available for an approved rollback window. Rollback should not require rebuilding historical data during the cutover itself.
 
 ## Deployment manifests
 
 Each implementation contains `deploy_manifest.fragment.txt`. It is a reviewable fragment showing the committed SQL that must be added to the domain-owned `silver_processing/deploy_manifest.txt` when the implementation is ready to deploy.
+
+CONTROL and SILVER manifests are executed through the checksum-locked apply-once migration runner. Previously successful migrations are skipped; modifying, reordering or removing an applied migration blocks deployment.
 
 The framework does not edit an existing global deployment manifest behind the engineer's back and does not scaffold at deployment time.
 
