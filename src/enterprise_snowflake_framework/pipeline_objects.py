@@ -16,8 +16,10 @@ def render_objects_sql(pattern: str, names: PipelineNames, contract: dict[str, A
         assert names.events_relation and names.history_relation and names.current_relation and names.stream
         return f"""-- {names.dataset_key} {names.version}: retained SCD2 evidence and physical history.
 -- Bronze must retain the source-change evidence promised by the RAW contract.
+-- These are new version-owned names. CREATE is intentionally fail-closed so an unexpected
+-- pre-existing object is investigated instead of silently adopted or replaced.
 
-CREATE TABLE IF NOT EXISTS {names.events_relation} (
+CREATE TABLE {names.events_relation} (
 {defs},
     ESF_STREAM_ACTION VARCHAR NOT NULL,
     ESF_STREAM_ISUPDATE BOOLEAN NOT NULL,
@@ -25,7 +27,7 @@ CREATE TABLE IF NOT EXISTS {names.events_relation} (
     ESF_CAPTURED_AT TIMESTAMP_LTZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
 );
 
-CREATE TABLE IF NOT EXISTS {names.history_relation} (
+CREATE TABLE {names.history_relation} (
 {defs},
     VALID_FROM TIMESTAMP_NTZ NOT NULL,
     VALID_TO TIMESTAMP_NTZ,
@@ -34,12 +36,12 @@ CREATE TABLE IF NOT EXISTS {names.history_relation} (
     ESF_BUILT_AT TIMESTAMP_LTZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
 );
 
-CREATE OR REPLACE VIEW {names.current_relation} AS
+CREATE VIEW {names.current_relation} AS
 SELECT *
 FROM {names.history_relation}
 WHERE IS_ACTIVE = TRUE;
 
-CREATE STREAM IF NOT EXISTS {names.stream}
+CREATE STREAM {names.stream}
     ON TABLE {names.bronze_relation}
     APPEND_ONLY = FALSE;
 """
@@ -48,13 +50,15 @@ CREATE STREAM IF NOT EXISTS {names.stream}
     if names.stream:
         stream_sql = f"""
 
-CREATE STREAM IF NOT EXISTS {names.stream}
+CREATE STREAM {names.stream}
     ON TABLE {names.bronze_relation}
     APPEND_ONLY = FALSE;
 """
     return f"""-- {names.dataset_key} {names.version}: versioned Silver table.
+-- This is a new version-owned name. CREATE is intentionally fail-closed so an unexpected
+-- pre-existing object is investigated instead of silently adopted or replaced.
 
-CREATE TABLE IF NOT EXISTS {names.physical_relation} (
+CREATE TABLE {names.physical_relation} (
 {defs},
     ESF_LOADED_AT TIMESTAMP_LTZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
 );{stream_sql}"""
@@ -82,7 +86,8 @@ def _validation_procedure(names: PipelineNames, checks: list[tuple[str, str, str
     rendered = "\n".join(_dq_insert(names, check_id, query, description) for check_id, query, description in checks)
     return f"""-- Dataset-local structural validation. Business DQ rules may be added here by the domain.
 -- Results are normalized into CONTROL.DQ_RESULT; CONTROL does not define these checks at runtime.
-CREATE OR REPLACE PROCEDURE {names.validate_procedure}()
+-- The version owns a unique procedure name, so CREATE is fail-closed on an unexpected collision.
+CREATE PROCEDURE {names.validate_procedure}()
 RETURNS OBJECT
 LANGUAGE SQL
 EXECUTE AS OWNER
