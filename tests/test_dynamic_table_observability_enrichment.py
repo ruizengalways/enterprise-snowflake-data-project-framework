@@ -88,6 +88,8 @@ class DynamicTableObservabilityEnrichmentTests(unittest.TestCase):
         running = "WHEN R.STATE = 'EXECUTING' OR C.EXECUTING_REFRESH_QUERY_ID IS NOT NULL THEN 'RUNNING'"
         success = "WHEN COALESCE(R.STATE, C.LAST_COMPLETED_REFRESH_STATE) IN ('SUCCEEDED', 'SKIPPED') THEN 'SUCCESS'"
         self.assertLess(sql.index(running), sql.index(success))
+        self.assertIn("COALESCE(R.EXECUTING_REFRESH_QUERY_ID, R.QUERY_ID)", sql)
+        self.assertNotIn("COALESCE(R.QUERY_ID, R.EXECUTING_REFRESH_QUERY_ID)", sql)
 
     def test_enrichment_reuses_existing_views_and_never_fabricates_runtime_rows(self) -> None:
         _, root = self._project()
