@@ -1,0 +1,149 @@
+schema_version: 1
+source_id: cert_source
+owner: framework-cert
+
+# These fixtures are intentionally tiny and deterministic. They describe evidence that the
+# certification runner inserts into BRONZE; expected results are asserted independently by
+# the runner rather than inferred from generated SQL.
+datasets:
+  append_events:
+    pattern: append
+    contract:
+      source_system: cert_source
+      entity: append_events
+      grain: one row per source event
+      business_key: [id]
+      source_timestamp: source_updated_at
+      columns:
+        - {name: id, type: VARCHAR, nullable: false}
+        - {name: value, type: VARCHAR, nullable: true}
+        - {name: source_updated_at, type: TIMESTAMP_NTZ, nullable: false}
+        - {name: source_sequence, type: NUMBER, nullable: false}
+        - {name: source_operation, type: VARCHAR, nullable: false}
+        - {name: ingested_at, type: TIMESTAMP_LTZ, nullable: false}
+      change_semantics:
+        mode: append
+        sequence_column: source_sequence
+        delete_semantics: none
+      capture_fidelity: full_event
+      ordering_columns: [source_updated_at, source_sequence]
+      idempotency_key: [id, source_sequence]
+      breaking_change_policy: versioned_contract
+    events:
+      initial:
+        - {id: '1', value: alpha, source_updated_at: '2026-01-01 10:00:00', source_sequence: 1, source_operation: I, ingested_at: '2026-01-01 10:00:05 +00:00'}
+      duplicate:
+        - {id: '1', value: alpha, source_updated_at: '2026-01-01 10:00:00', source_sequence: 1, source_operation: I, ingested_at: '2026-01-01 10:00:06 +00:00'}
+      task_trigger:
+        - {id: '2', value: beta, source_updated_at: '2026-01-01 11:00:00', source_sequence: 1, source_operation: I, ingested_at: '2026-01-01 11:00:05 +00:00'}
+
+  scd1_customer:
+    pattern: scd1
+    contract:
+      source_system: cert_source
+      entity: scd1_customer
+      grain: one row per source change
+      business_key: [id]
+      source_timestamp: source_updated_at
+      columns:
+        - {name: id, type: VARCHAR, nullable: false}
+        - {name: value, type: VARCHAR, nullable: true}
+        - {name: source_updated_at, type: TIMESTAMP_NTZ, nullable: false}
+        - {name: source_sequence, type: NUMBER, nullable: false}
+        - {name: source_operation, type: VARCHAR, nullable: false}
+        - {name: ingested_at, type: TIMESTAMP_LTZ, nullable: false}
+      change_semantics:
+        mode: cdc
+        operation_column: source_operation
+        sequence_column: source_sequence
+        delete_semantics: tombstone
+        delete_values: [D]
+      capture_fidelity: full_change
+      ordering_columns: [source_updated_at, source_sequence]
+      idempotency_key: [id, source_sequence]
+      breaking_change_policy: versioned_contract
+    events:
+      initial:
+        - {id: '1', value: A, source_updated_at: '2026-01-02 10:00:00', source_sequence: 1, source_operation: I, ingested_at: '2026-01-02 10:00:05 +00:00'}
+      update:
+        - {id: '1', value: B, source_updated_at: '2026-01-02 11:00:00', source_sequence: 2, source_operation: U, ingested_at: '2026-01-02 11:00:05 +00:00'}
+      duplicate:
+        - {id: '1', value: B, source_updated_at: '2026-01-02 11:00:00', source_sequence: 2, source_operation: U, ingested_at: '2026-01-02 11:00:06 +00:00'}
+      late_arrival:
+        - {id: '1', value: LATE, source_updated_at: '2026-01-02 10:30:00', source_sequence: 3, source_operation: U, ingested_at: '2026-01-02 11:30:00 +00:00'}
+      delete:
+        - {id: '1', value: B, source_updated_at: '2026-01-02 12:00:00', source_sequence: 4, source_operation: D, ingested_at: '2026-01-02 12:00:05 +00:00'}
+      reinsert:
+        - {id: '1', value: C, source_updated_at: '2026-01-02 13:00:00', source_sequence: 5, source_operation: I, ingested_at: '2026-01-02 13:00:05 +00:00'}
+      out_of_order:
+        - {id: '1', value: OLD, source_updated_at: '2026-01-02 12:30:00', source_sequence: 6, source_operation: U, ingested_at: '2026-01-02 13:30:00 +00:00'}
+
+  scd2_customer:
+    pattern: scd2
+    contract:
+      source_system: cert_source
+      entity: scd2_customer
+      grain: one row per source change
+      business_key: [id]
+      source_timestamp: source_updated_at
+      columns:
+        - {name: id, type: VARCHAR, nullable: false}
+        - {name: value, type: VARCHAR, nullable: true}
+        - {name: source_updated_at, type: TIMESTAMP_NTZ, nullable: false}
+        - {name: source_sequence, type: NUMBER, nullable: false}
+        - {name: source_operation, type: VARCHAR, nullable: false}
+        - {name: ingested_at, type: TIMESTAMP_LTZ, nullable: false}
+      change_semantics:
+        mode: cdc
+        operation_column: source_operation
+        sequence_column: source_sequence
+        delete_semantics: tombstone
+        delete_values: [D]
+      capture_fidelity: full_change
+      ordering_columns: [source_updated_at, source_sequence]
+      idempotency_key: [id, source_sequence]
+      breaking_change_policy: versioned_contract
+    events:
+      initial:
+        - {id: '1', value: A, source_updated_at: '2026-01-03 10:00:00', source_sequence: 1, source_operation: I, ingested_at: '2026-01-03 10:00:05 +00:00'}
+      update:
+        - {id: '1', value: B, source_updated_at: '2026-01-03 11:00:00', source_sequence: 2, source_operation: U, ingested_at: '2026-01-03 11:00:05 +00:00'}
+      later_update:
+        - {id: '1', value: D, source_updated_at: '2026-01-03 13:00:00', source_sequence: 4, source_operation: U, ingested_at: '2026-01-03 13:00:05 +00:00'}
+      late_arrival:
+        - {id: '1', value: C, source_updated_at: '2026-01-03 12:00:00', source_sequence: 3, source_operation: U, ingested_at: '2026-01-03 13:30:00 +00:00'}
+      delete:
+        - {id: '1', value: D, source_updated_at: '2026-01-03 14:00:00', source_sequence: 5, source_operation: D, ingested_at: '2026-01-03 14:00:05 +00:00'}
+      reinsert:
+        - {id: '1', value: E, source_updated_at: '2026-01-03 15:00:00', source_sequence: 6, source_operation: I, ingested_at: '2026-01-03 15:00:05 +00:00'}
+
+  full_reference:
+    pattern: full_refresh
+    contract:
+      source_system: cert_source
+      entity: full_reference
+      grain: one row per current reference code
+      business_key: [id]
+      source_timestamp: source_updated_at
+      columns:
+        - {name: id, type: VARCHAR, nullable: false}
+        - {name: value, type: VARCHAR, nullable: true}
+        - {name: source_updated_at, type: TIMESTAMP_NTZ, nullable: false}
+        - {name: source_sequence, type: NUMBER, nullable: false}
+        - {name: source_operation, type: VARCHAR, nullable: false}
+        - {name: ingested_at, type: TIMESTAMP_LTZ, nullable: false}
+      change_semantics:
+        mode: snapshot
+        sequence_column: source_sequence
+        delete_semantics: none
+      capture_fidelity: current_state
+      ordering_columns: [source_updated_at, source_sequence]
+      idempotency_key: [id]
+      breaking_change_policy: versioned_contract
+    snapshots:
+      initial:
+        - {id: '1', value: red, source_updated_at: '2026-01-04 10:00:00', source_sequence: 1, source_operation: S, ingested_at: '2026-01-04 10:00:05 +00:00'}
+        - {id: '2', value: blue, source_updated_at: '2026-01-04 10:00:00', source_sequence: 1, source_operation: S, ingested_at: '2026-01-04 10:00:05 +00:00'}
+      replacement:
+        - {id: '2', value: blue2, source_updated_at: '2026-01-04 11:00:00', source_sequence: 2, source_operation: S, ingested_at: '2026-01-04 11:00:05 +00:00'}
+        - {id: '3', value: green, source_updated_at: '2026-01-04 11:00:00', source_sequence: 1, source_operation: S, ingested_at: '2026-01-04 11:00:05 +00:00'}
