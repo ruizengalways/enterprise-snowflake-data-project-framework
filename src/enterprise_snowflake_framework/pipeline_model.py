@@ -23,6 +23,7 @@ class PipelineNames:
     published_current: str | None
     apply_procedure: str
     replay_procedure: str
+    validate_procedure: str
     task: str
 
 
@@ -65,6 +66,7 @@ def build_names(*, source_id: str, dataset_id: str, pattern: str, entity: str, v
         published_current=published_current,
         apply_procedure=f"SILVER.APPLY_{base}_{version_u}",
         replay_procedure=f"SILVER.REPLAY_{base}_{version_u}",
+        validate_procedure=f"SILVER.VALIDATE_{base}_{version_u}",
         task=f"SILVER.{base}_{version_u}_TASK",
     )
 
