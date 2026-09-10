@@ -48,27 +48,35 @@ def _target_readiness_note(names: PipelineNames, *, rollback: bool) -> str:
     return f"-- The {action} custom runtime must already satisfy its domain-owned readiness procedure.\n"
 
 
+def _view_definition_reference_predicate(relation: str) -> str:
+    pattern = relation.upper().replace(".", "[.]")
+    return (
+        "REGEXP_INSTR(UPPER(COALESCE(VIEW_DEFINITION, '')), "
+        f"'(^|[^A-Z0-9_]){pattern}([^A-Z0-9_]|$)') > 0"
+    )
+
+
 def _published_match_query(pattern: str, names: PipelineNames) -> tuple[int, str]:
     if pattern == "scd2":
         assert names.history_relation and names.published_history and names.published_current
         history_view = names.published_history.split(".", 1)[1]
         current_view = names.published_current.split(".", 1)[1]
-        relation = names.history_relation.upper()
+        reference_match = _view_definition_reference_predicate(names.history_relation)
         return 2, f"""SELECT COUNT(*)
         FROM INFORMATION_SCHEMA.VIEWS
         WHERE TABLE_SCHEMA = 'SILVER'
           AND (
-                (TABLE_NAME = '{history_view}' AND POSITION('{relation}' IN UPPER(COALESCE(VIEW_DEFINITION, ''))) > 0)
-             OR (TABLE_NAME = '{current_view}' AND POSITION('{relation}' IN UPPER(COALESCE(VIEW_DEFINITION, ''))) > 0)
+                (TABLE_NAME = '{history_view}' AND {reference_match})
+             OR (TABLE_NAME = '{current_view}' AND {reference_match})
           )"""
     assert names.physical_relation and names.published_relation
     published_view = names.published_relation.split(".", 1)[1]
-    relation = names.physical_relation.upper()
+    reference_match = _view_definition_reference_predicate(names.physical_relation)
     return 1, f"""SELECT COUNT(*)
         FROM INFORMATION_SCHEMA.VIEWS
         WHERE TABLE_SCHEMA = 'SILVER'
           AND TABLE_NAME = '{published_view}'
-          AND POSITION('{relation}' IN UPPER(COALESCE(VIEW_DEFINITION, ''))) > 0"""
+          AND {reference_match}"""
 
 
 def _sql_string(value: str | None) -> str:
