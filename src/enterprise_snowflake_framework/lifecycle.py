@@ -109,7 +109,7 @@ def generate_lifecycle_scripts(
         sql = f"""-- {action.upper()} logical dataset {dataset_key} using explicit implementation {version}.
 -- Execution model: {execution.execution_model}
 -- Generated for review. `esf` does not execute this file.
--- Requires CONTROL lifecycle migration and execution-model migration 090.
+-- Requires CONTROL migrations 050_dataset_lifecycle_status.sql and 090_dataset_execution_model.sql.
 
 {runtime_sql}
 UPDATE CONTROL.DATASET
