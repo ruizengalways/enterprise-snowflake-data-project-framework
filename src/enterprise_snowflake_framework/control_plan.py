@@ -19,6 +19,7 @@ KNOWN_CONTROL_SQL = (
     "control_plane/sql/110_pipeline_execution_metrics.sql",
     "control_plane/sql/120_release_readiness.sql",
     "control_plane/sql/130_health_evaluation_cadence.sql",
+    "control_plane/sql/140_dynamic_table_observability_enrichment.sql",
 )
 
 

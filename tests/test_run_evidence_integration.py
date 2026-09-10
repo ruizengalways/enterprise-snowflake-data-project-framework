@@ -106,14 +106,18 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
         dbt_project = self.root / "dbt" / "dbt_project.yml"
         dbt_project.write_text(old_dbt_project, encoding="utf-8")
 
-        (self.root / "control_plane" / "sql" / "060_run_evidence_api.sql").unlink()
-        (self.root / "control_plane" / "sql" / "070_enterprise_health_export.sql").unlink()
-        (self.root / "control_plane" / "sql" / "080_data_quality_reconciliation.sql").unlink()
-        (self.root / "control_plane" / "sql" / "090_dataset_execution_model.sql").unlink()
-        (self.root / "control_plane" / "sql" / "100_dynamic_table_observability.sql").unlink()
-        (self.root / "control_plane" / "sql" / "110_pipeline_execution_metrics.sql").unlink()
-        (self.root / "control_plane" / "sql" / "120_release_readiness.sql").unlink()
-        (self.root / "control_plane" / "sql" / "130_health_evaluation_cadence.sql").unlink()
+        for name in (
+            "060_run_evidence_api.sql",
+            "070_enterprise_health_export.sql",
+            "080_data_quality_reconciliation.sql",
+            "090_dataset_execution_model.sql",
+            "100_dynamic_table_observability.sql",
+            "110_pipeline_execution_metrics.sql",
+            "120_release_readiness.sql",
+            "130_health_evaluation_cadence.sql",
+            "140_dynamic_table_observability_enrichment.sql",
+        ):
+            (self.root / "control_plane" / "sql" / name).unlink()
         (self.root / "dbt" / "macros" / "esf_observability.sql").unlink()
         (self.root / "dbt" / "README.md").unlink()
         (self.root / "ingestion" / "RUN_EVIDENCE.md").unlink()
@@ -123,14 +127,18 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
 
         self.assertEqual(old_manifest, manifest.read_text(encoding="utf-8"))
         self.assertEqual(old_dbt_project, dbt_project.read_text(encoding="utf-8"))
-        self.assertTrue((self.root / "control_plane" / "sql" / "060_run_evidence_api.sql").is_file())
-        self.assertTrue((self.root / "control_plane" / "sql" / "070_enterprise_health_export.sql").is_file())
-        self.assertTrue((self.root / "control_plane" / "sql" / "080_data_quality_reconciliation.sql").is_file())
-        self.assertTrue((self.root / "control_plane" / "sql" / "090_dataset_execution_model.sql").is_file())
-        self.assertTrue((self.root / "control_plane" / "sql" / "100_dynamic_table_observability.sql").is_file())
-        self.assertTrue((self.root / "control_plane" / "sql" / "110_pipeline_execution_metrics.sql").is_file())
-        self.assertTrue((self.root / "control_plane" / "sql" / "120_release_readiness.sql").is_file())
-        self.assertTrue((self.root / "control_plane" / "sql" / "130_health_evaluation_cadence.sql").is_file())
+        for name in (
+            "060_run_evidence_api.sql",
+            "070_enterprise_health_export.sql",
+            "080_data_quality_reconciliation.sql",
+            "090_dataset_execution_model.sql",
+            "100_dynamic_table_observability.sql",
+            "110_pipeline_execution_metrics.sql",
+            "120_release_readiness.sql",
+            "130_health_evaluation_cadence.sql",
+            "140_dynamic_table_observability_enrichment.sql",
+        ):
+            self.assertTrue((self.root / "control_plane" / "sql" / name).is_file())
         self.assertTrue((self.root / "dbt" / "macros" / "esf_observability.sql").is_file())
         self.assertTrue((self.root / "ingestion" / "RUN_EVIDENCE.md").is_file())
 
@@ -146,6 +154,7 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
                 "control_plane/sql/110_pipeline_execution_metrics.sql",
                 "control_plane/sql/120_release_readiness.sql",
                 "control_plane/sql/130_health_evaluation_cadence.sql",
+                "control_plane/sql/140_dynamic_table_observability_enrichment.sql",
             ),
             plan.missing_from_manifest,
         )

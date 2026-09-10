@@ -108,7 +108,11 @@ class ReleaseReadinessInvariantTests(unittest.TestCase):
 
         manifest = (self.root / "control_plane" / "deploy_manifest.txt").read_text(encoding="utf-8")
         self.assertIn("control_plane/sql/120_release_readiness.sql", manifest)
-        self.assertTrue(manifest.rstrip().endswith("control_plane/sql/130_health_evaluation_cadence.sql"))
+        self.assertTrue(
+            manifest.rstrip().endswith(
+                "control_plane/sql/140_dynamic_table_observability_enrichment.sql"
+            )
+        )
         self.assertTrue(build_control_plan(self.root).ready)
 
     def test_candidate_registration_blocks_second_candidate_before_pointer_update(self) -> None:

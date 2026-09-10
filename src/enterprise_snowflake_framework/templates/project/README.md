@@ -10,7 +10,7 @@ Source -> Ingestion -> BRONZE -> SILVER -> dbt -> GOLD_MARTS -> SEMANTIC
 CONTROL = cross-cutting operational evidence, health, lifecycle and release state
 ```
 
-A domain may contain many source systems. New generated Snowflake object names preserve the source boundary so same-named datasets from different sources do not collide by default.
+A domain may contain many source systems. Generated Snowflake object names preserve the source boundary so same-named datasets from different sources do not collide by default.
 
 The Enterprise Snowflake Framework creates starters, but ownership is append-only:
 
@@ -21,13 +21,14 @@ existing ownership unit -> never overwrite
 
 This applies to RAW contract drafts/formal contracts, source-manifest dataset declarations, dataset roots, candidate `versions/vN/` directories and generated operational bundles.
 
-This project owns a domain-local control plane under `control_plane/`. The committed SQL creates this domain's `CONTROL` schema, operational ledgers, version/SLA state, quality evidence, health evaluation, incident lifecycle and dashboard-ready views. It is not a shared global runtime database.
+This project owns a domain-local Control Plane under `control_plane/`. It is not a shared global runtime database.
 
-Operational evidence follows one domain contract:
+Operational evidence stays normalized without forcing every execution technology into one runtime ledger:
 
 ```text
 source-specific ingestion  -> CONTROL.INGESTION_RUN
 explicit Silver apply      -> CONTROL.PIPELINE_RUN
+Dynamic Table              -> Snowflake native refresh/scheduling metadata
 Silver validation          -> CONTROL.DQ_RESULT
 dbt model result           -> CONTROL.DBT_RUN
 reconciliation code        -> CONTROL.RECONCILIATION_RESULT
@@ -35,11 +36,11 @@ release/rollback attempt   -> CONTROL.RELEASE_RUN
 health cadence operation   -> CONTROL.HEALTH_EVALUATION_CHANGE
 ```
 
-See `ingestion/RUN_EVIDENCE.md`, `operations/reconciliation/README.md`, `operations/health/README.md` and `dbt/README.md`. Ingestion remains source-specific; the ledger API does not replace Openflow, Snowpipe, Kafka, Talend, ADF or project-specific ingestion.
+See `ingestion/RUN_EVIDENCE.md`, `operations/reconciliation/README.md`, `operations/health/README.md` and `dbt/README.md`. Ingestion remains source-specific; normalized evidence does not replace Openflow, Snowpipe, Kafka, Talend, ADF or project-specific ingestion.
 
-Standard scaffolded `020_validate.sql` is dataset-local source code. It records small structural checks after a successful apply. Business DQ rules remain domain-owned. Reconciliation logic is never inferred; the project computes the comparison valid for its source/pattern and records normalized evidence when useful.
+Standard scaffolded validation is dataset-local source code. Business DQ rules remain domain-owned. Reconciliation logic is never inferred; the project computes the comparison valid for its source/pattern and records normalized evidence when useful.
 
-Enterprise monitoring reads the domain's stable `CONTROL.ENTERPRISE_HEALTH_EXPORT_V` / `CONTROL.DOMAIN_HEALTH_SUMMARY_V`. Cross-domain monitoring remains read-only. Active-version DQ/reconciliation failures can affect production health; candidate evidence remains for shadow/release review.
+Enterprise monitoring reads stable `CONTROL.ENTERPRISE_HEALTH_EXPORT_V` / `CONTROL.DOMAIN_HEALTH_SUMMARY_V`. Cross-domain monitoring is read-only. Candidate evidence remains isolated for shadow/release review.
 
 ## RAW contract -> dataset workflow
 
@@ -84,6 +85,28 @@ esf control-plan --project-root .
 ```
 
 when adopting Framework Control Plane upgrades. `init-project` may materialize newly introduced migration files, but it never rewrites this repository's existing `control_plane/deploy_manifest.txt`. Review and append newly adopted migrations explicitly without reordering applied history.
+
+### Dynamic Table observability
+
+Migration `100_dynamic_table_observability.sql` established the native Dynamic Table evidence path and remains immutable. Migration `140_dynamic_table_observability_enrichment.sql` enriches the same views using recent/current Snowflake Information Schema metadata.
+
+Detailed diagnostics are available in:
+
+```text
+CONTROL.DYNAMIC_TABLE_REFRESH_STATUS_V
+```
+
+including refresh action/trigger/reinitialization reason, native refresh statistics, changed inputs, scheduling state/reason, target/mean/maximum lag, time above target lag, within-target ratio, last completed refresh state and current executing query id.
+
+The common operational surface remains:
+
+```text
+CONTROL.DATASET_OBSERVABILITY_V
+```
+
+It exposes only compact Dynamic Table triage fields alongside explicit-pipeline evidence. The Framework does not create fake Dynamic Table `CONTROL.PIPELINE_RUN` rows or a second unified health layer.
+
+### Domain health evaluator cadence
 
 Migration `130_health_evaluation_cadence.sql` makes the **domain health evaluator schedule** configurable without changing released `040_health_task.sql`. Migration 130 only creates an audit/read contract; it does not silently retune the Task.
 
