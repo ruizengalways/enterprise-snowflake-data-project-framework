@@ -7,7 +7,12 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
-from .execution_model import default_execution_model, validate_execution_model
+from .execution_model import (
+    TaskExecution,
+    default_execution_model,
+    validate_execution_model,
+    validate_task_execution,
+)
 
 SCHEMA_FILES = {
     "project": "project.schema.json",
@@ -254,6 +259,18 @@ def validate_version_document(
     execution_model = str(version.get("execution_model") or default_execution_model(pattern))
     try:
         validate_execution_model(pattern, execution_model)
+        task_doc = version.get("task")
+        if isinstance(task_doc, dict):
+            validate_task_execution(
+                pattern,
+                TaskExecution(
+                    warehouse=str(task_doc["warehouse"]),
+                    minimum_trigger_interval_seconds=task_doc.get("minimum_trigger_interval_seconds"),
+                    timeout_seconds=task_doc.get("timeout_seconds"),
+                    suspend_after_failures=task_doc.get("suspend_after_failures"),
+                    error_integration=task_doc.get("error_integration"),
+                ),
+            )
     except ValueError as exc:
         errors.append(f"{path}: {exc}")
     return errors

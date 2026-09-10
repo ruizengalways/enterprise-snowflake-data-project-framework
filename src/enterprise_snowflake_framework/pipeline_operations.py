@@ -5,28 +5,57 @@ from .pipeline_model import PipelineNames
 from .release_operations import render_release_sql
 
 
-def render_task_sql(pattern: str, names: PipelineNames, project_code: str) -> str:
+def render_task_sql(
+    pattern: str,
+    names: PipelineNames,
+    project_code: str,
+    *,
+    execution: VersionExecution | None = None,
+) -> str:
     if names.execution_model != "stream_task":
         raise ValueError("Task SQL is only valid for execution_model=stream_task")
+    if execution is not None and execution.execution_model != "stream_task":
+        raise ValueError("Task execution config requires execution_model=stream_task")
     if pattern == "custom" or not names.task:
         return (
             f"-- {names.dataset_key} {names.version}: custom task/orchestration.\n"
             "-- Use a Snowflake Task only when it fits this dataset's readiness model.\n"
         )
-    when = f"\n    WHEN SYSTEM$STREAM_HAS_DATA('{names.stream}')" if names.stream else ""
+
+    task = execution.task if execution is not None else None
+    warehouse = task.warehouse if task is not None else f"WH_{project_code}_TRANSFORM"
+    properties = [f"    WAREHOUSE = {warehouse}"]
+    if task is not None and task.minimum_trigger_interval_seconds is not None:
+        properties.append(
+            "    USER_TASK_MINIMUM_TRIGGER_INTERVAL_IN_SECONDS = "
+            f"{task.minimum_trigger_interval_seconds}"
+        )
+    if task is not None and task.timeout_seconds is not None:
+        properties.append(f"    USER_TASK_TIMEOUT_MS = {task.timeout_seconds * 1000}")
+    if task is not None and task.suspend_after_failures is not None:
+        properties.append(
+            f"    SUSPEND_TASK_AFTER_NUM_FAILURES = {task.suspend_after_failures}"
+        )
+    if task is not None and task.error_integration is not None:
+        properties.append(f"    ERROR_INTEGRATION = {task.error_integration}")
+    if names.stream:
+        properties.append(f"    WHEN SYSTEM$STREAM_HAS_DATA('{names.stream}')")
+
     readiness = (
         "-- Triggered by unconsumed stream data."
         if names.stream
         else "-- No readiness signal is assumed. Add SCHEDULE/AFTER/control-event wiring before activation."
     )
     assert names.apply_procedure and names.validate_procedure
+    task_properties = "\n".join(properties)
     return f"""{readiness}
+-- Operational settings below belong to this implementation version, not to the logical dataset SLA.
 -- This version owns a new task name. CREATE is intentionally fail-closed: an unexpected
 -- pre-existing task is an ownership conflict and must not be silently replaced or suspended.
 -- Snowflake creates new tasks suspended. Validation and activation are explicit.
 -- One task run applies the transformation and then records dataset-local structural DQ evidence.
 CREATE TASK {names.task}
-    WAREHOUSE = WH_{project_code}_TRANSFORM{when}
+{task_properties}
 AS
 BEGIN
     CALL {names.apply_procedure}();

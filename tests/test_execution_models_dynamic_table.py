@@ -188,6 +188,7 @@ class ExecutionModelDynamicTableTests(unittest.TestCase):
             version_path = project / "silver_processing" / "fleet_mssql" / "customer" / "version.yml"
             document = yaml.safe_load(version_path.read_text(encoding="utf-8"))
             document["version"].pop("execution_model", None)
+            document["version"].pop("task", None)
             version_path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
             self.assertEqual([], validate_project_tree(project))
 

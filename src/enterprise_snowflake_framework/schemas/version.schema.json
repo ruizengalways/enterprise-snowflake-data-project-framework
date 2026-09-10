@@ -37,6 +37,18 @@
             "warehouse": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
             "refresh_mode": {"enum": ["incremental", "full"]}
           }
+        },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["warehouse"],
+          "properties": {
+            "warehouse": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+            "minimum_trigger_interval_seconds": {"type": "integer", "minimum": 10, "maximum": 604800},
+            "timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 604800},
+            "suspend_after_failures": {"type": "integer", "minimum": 0},
+            "error_integration": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}
+          }
         }
       },
       "allOf": [
@@ -44,6 +56,13 @@
           "if": {"properties": {"execution_model": {"const": "dynamic_table"}}, "required": ["execution_model"]},
           "then": {"required": ["dynamic_table"]},
           "else": {"not": {"required": ["dynamic_table"]}}
+        },
+        {
+          "if": {"required": ["task"]},
+          "then": {
+            "required": ["execution_model"],
+            "properties": {"execution_model": {"const": "stream_task"}}
+          }
         }
       ]
     }

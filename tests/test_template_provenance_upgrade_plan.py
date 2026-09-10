@@ -14,6 +14,7 @@ from enterprise_snowflake_framework.source_management import add_source
 from enterprise_snowflake_framework.template_provenance import (
     FRAMEWORK_VERSION,
     TemplateAdvisory,
+    _TEMPLATE_HISTORY,
     build_upgrade_plan,
 )
 from enterprise_snowflake_framework.validation import validate_project_tree
@@ -117,7 +118,7 @@ class TemplateProvenanceUpgradePlanTests(unittest.TestCase):
         provenance = v1_doc["version"]["provenance"]
         self.assertEqual(FRAMEWORK_VERSION, provenance["framework_version"])
         self.assertEqual("scd2_stream_task", provenance["template_id"])
-        self.assertEqual(1, provenance["template_revision"])
+        self.assertEqual(2, provenance["template_revision"])
         self.assertRegex(provenance["template_digest"], r"^sha256:[0-9a-f]{64}$")
 
         v2 = scaffold_version(
@@ -129,6 +130,27 @@ class TemplateProvenanceUpgradePlanTests(unittest.TestCase):
         v2_doc = yaml.safe_load((v2 / "version.yml").read_text(encoding="utf-8"))
         self.assertEqual(provenance, v2_doc["version"]["provenance"])
         self.assertFalse(validate_project_tree(self.root))
+
+    def test_prior_registered_revision_is_update_available_not_rewritten(self) -> None:
+        v1 = self._scaffold()
+        version_file = v1 / "version.yml"
+        document = yaml.safe_load(version_file.read_text(encoding="utf-8"))
+        revision_one = _TEMPLATE_HISTORY["scd2_stream_task"][1]
+        document["version"]["provenance"] = {
+            "framework_version": "0.22.0",
+            "template_id": "scd2_stream_task",
+            "template_revision": 1,
+            "template_digest": revision_one.digest,
+        }
+        version_file.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+
+        before = self._snapshot()
+        entry = build_upgrade_plan(self.root).entries[0]
+        after = self._snapshot()
+        self.assertEqual(before, after)
+        self.assertEqual("UPDATE_AVAILABLE", entry.status)
+        self.assertEqual(2, entry.current_revision)
+        self.assertEqual(1, entry.provenance.template_revision)
 
     def test_legacy_version_without_provenance_is_unknown_and_never_inferred_from_sql(self) -> None:
         v1 = self._scaffold()
@@ -169,7 +191,7 @@ class TemplateProvenanceUpgradePlanTests(unittest.TestCase):
             advisory_id="ESF-TEST-001",
             severity="HIGH",
             template_id="scd2_stream_task",
-            affected_max_revision=1,
+            affected_max_revision=2,
             issue="fixture issue for advisory matching",
             recommendation="create a new candidate with the current template and compare evidence",
         )
