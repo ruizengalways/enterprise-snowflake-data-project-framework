@@ -7,11 +7,14 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
+from .execution_model import default_execution_model, validate_execution_model
+
 SCHEMA_FILES = {
     "project": "project.schema.json",
     "raw_contract": "raw_contract.schema.json",
     "silver_pipeline": "silver_pipeline.schema.json",
     "source_manifest": "source_manifest.schema.json",
+    "version": "version.schema.json",
 }
 
 
@@ -223,6 +226,39 @@ def validate_silver_pipeline(
     return errors
 
 
+def validate_version_document(
+    document: dict[str, Any], path: Path, project_root: Path,
+    source_manifests: dict[str, dict[str, Any]],
+) -> list[str]:
+    errors: list[str] = []
+    relative = path.relative_to(project_root / "silver_processing")
+    parts = relative.parts
+    if len(parts) == 3 and parts[2] == "version.yml":
+        source_id, dataset_id = parts[0], parts[1]
+        expected_version = "v1"
+    elif len(parts) == 5 and parts[2] == "versions" and parts[4] == "version.yml":
+        source_id, dataset_id, expected_version = parts[0], parts[1], parts[3]
+    else:
+        return [f"{path}: version.yml must be under a dataset root or versions/vN directory"]
+    version = document["version"]
+    if version["dataset"] != f"{source_id}.{dataset_id}":
+        errors.append(f"{path}: version.dataset must match {source_id}.{dataset_id}")
+    if version["id"] != expected_version:
+        errors.append(f"{path}: version.id must match implementation directory {expected_version}")
+    manifest = source_manifests.get(source_id)
+    config = manifest.get("datasets", {}).get(dataset_id) if isinstance(manifest, dict) else None
+    if not isinstance(config, dict) or not isinstance(config.get("pattern"), str):
+        errors.append(f"{path}: logical dataset declaration not found for execution-model validation")
+        return errors
+    pattern = str(config["pattern"])
+    execution_model = str(version.get("execution_model") or default_execution_model(pattern))
+    try:
+        validate_execution_model(pattern, execution_model)
+    except ValueError as exc:
+        errors.append(f"{path}: {exc}")
+    return errors
+
+
 def validate_project_tree(project_root: Path, schema_dir: Path | None = None) -> list[str]:
     project_root = project_root.resolve()
     schema_dir = (schema_dir or default_schema_dir()).resolve()
@@ -272,6 +308,7 @@ def validate_project_tree(project_root: Path, schema_dir: Path | None = None) ->
             errors.extend(validate_source_manifest(document, source_path, project_root, raw_schema))
 
         silver_schema = load_schema(schema_dir, "silver_pipeline")
+        version_schema = load_schema(schema_dir, "version")
         silver_root = project_root / "silver_processing"
         pipeline_paths = sorted(silver_root.rglob("pipeline.yml")) if silver_root.is_dir() else []
         for pipeline_path in pipeline_paths:
@@ -284,6 +321,13 @@ def validate_project_tree(project_root: Path, schema_dir: Path | None = None) ->
                         document, pipeline_path, project_root, raw_schema, source_manifests
                     )
                 )
+        version_paths = sorted(silver_root.rglob("version.yml")) if silver_root.is_dir() else []
+        for version_path in version_paths:
+            document = load_document(version_path)
+            current = schema_errors(document, version_schema, version_path)
+            errors.extend(current)
+            if not current:
+                errors.extend(validate_version_document(document, version_path, project_root, source_manifests))
     except MetadataValidationError as exc:
         errors.append(str(exc))
     return errors
