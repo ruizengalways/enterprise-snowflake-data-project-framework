@@ -7,6 +7,7 @@ from pathlib import Path
 
 PROJECT_DIRECTORIES = (
     "config/sources",
+    "contracts/drafts",
     "contracts/raw",
     "ingestion",
     "ingestion/examples",
@@ -29,6 +30,7 @@ PROJECT_DIRECTORIES = (
 
 TRACKED_EMPTY_DIRECTORIES = (
     "config/sources",
+    "contracts/drafts",
     "contracts/raw",
     "dbt/models/sources",
     "dbt/models/marts",
