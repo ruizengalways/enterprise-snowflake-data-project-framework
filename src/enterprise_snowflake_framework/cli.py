@@ -19,6 +19,7 @@ from .scaffold import (
 )
 from .sla_policy import CADENCE_TYPES, SLA_STAGES, generate_sla_sql
 from .source_management import add_source
+from .template_provenance import build_upgrade_plan
 from .validation import validate_project_tree
 from .versioning import generate_release_scripts, scaffold_version
 
@@ -97,6 +98,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show domain control-plane upgrade/deploy-manifest gaps without modifying the repository.",
     )
     control_plan.add_argument("--project-root", type=Path, default=Path.cwd())
+
+    upgrade_plan = subparsers.add_parser(
+        "upgrade-plan",
+        help="Read declared template provenance and advisories without modifying domain-owned files.",
+    )
+    upgrade_plan.add_argument("--project-root", type=Path, default=Path.cwd())
 
     preview = subparsers.add_parser(
         "scaffold-preview", help="Render a new dataset starter in memory without writing files."
@@ -339,6 +346,10 @@ def main() -> None:
 
         if args.command == "control-plan":
             _print_control_plan(args.project_root)
+            return
+
+        if args.command == "upgrade-plan":
+            print(build_upgrade_plan(args.project_root).render(), end="")
             return
 
         if args.command == "scaffold-preview":
