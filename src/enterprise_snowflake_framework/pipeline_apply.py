@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from .pipeline_idempotency import (
+    IDEMPOTENCY_DECLARATIONS,
+    render_deduped_relation,
+    render_idempotency_conflict_guard,
+)
 from .pipeline_model import (
     PipelineNames, _column_defs, _csv, _delete_expression, _join, _typed_defs,
     column_names, ordered_columns, tracked_columns,
@@ -145,9 +150,11 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
             "-- Keep production transformation explicit in this file.\n"
         )
 
-    extra_declarations = ""
+    extra_declarations = (
+        IDEMPOTENCY_DECLARATIONS if pattern in {"append", "scd2"} else ""
+    )
     if pattern == "scd2":
-        extra_declarations = """    V_EVENTS_INSERTED NUMBER DEFAULT 0;
+        extra_declarations += """    V_EVENTS_INSERTED NUMBER DEFAULT 0;
     V_EVENTS_INSERT_QUERY_ID VARCHAR;
     V_HISTORY_ROWS_DELETED NUMBER DEFAULT 0;
     V_HISTORY_DELETE_QUERY_ID VARCHAR;
@@ -164,6 +171,17 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
         assert names.stream and names.physical_relation
         new_defs = _column_defs(contract)
         dedup = _join("T", "N", idempotency)
+        conflict_guard = render_idempotency_conflict_guard(
+            "ESF_NEW_EVENTS",
+            identity_columns=idempotency,
+            payload_columns=columns,
+        )
+        deduped_input = render_deduped_relation(
+            "ESF_NEW_EVENTS",
+            identity_columns=idempotency,
+            payload_columns=columns,
+            output_alias="N",
+        )
         return f"""{header}    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_NEW_EVENTS (
 {new_defs}
     );
@@ -177,12 +195,12 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
         WHERE METADATA$ACTION = 'INSERT';
 
         V_ROWS_READ := (SELECT COUNT(*) FROM ESF_NEW_EVENTS);
-        V_AFFECTED_BUSINESS_KEYS := {_distinct_business_keys('ESF_NEW_EVENTS', business_key)};
+{conflict_guard}        V_AFFECTED_BUSINESS_KEYS := {_distinct_business_keys('ESF_NEW_EVENTS', business_key)};
         V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM ESF_NEW_EVENTS);
 
         INSERT INTO {names.physical_relation} ({_csv(columns)}, ESF_LOADED_AT)
         SELECT {_csv(columns, 'N')}, CURRENT_TIMESTAMP()
-        FROM ESF_NEW_EVENTS N
+        FROM {deduped_input}
         WHERE NOT EXISTS (
             SELECT 1
             FROM {names.physical_relation} T
@@ -291,7 +309,20 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
             raise ValueError("scd2 SQL rendering requires source_timestamp, ordering columns and tracked columns")
         new_defs = _column_defs(contract)
         key_defs = _typed_defs(contract, business_key)
+        event_identity = [*idempotency, "ESF_STREAM_ACTION"]
+        event_payload = [*columns, "ESF_STREAM_ACTION", "ESF_STREAM_ISUPDATE"]
         dedup = _join("E", "N", idempotency) + " AND E.ESF_STREAM_ACTION = N.ESF_STREAM_ACTION"
+        conflict_guard = render_idempotency_conflict_guard(
+            "ESF_NEW_EVENTS",
+            identity_columns=event_identity,
+            payload_columns=event_payload,
+        )
+        deduped_input = render_deduped_relation(
+            "ESF_NEW_EVENTS",
+            identity_columns=event_identity,
+            payload_columns=event_payload,
+            output_alias="N",
+        )
         affected_events = _join("E", "K", business_key)
         affected_history = _join("H", "K", business_key)
         state_hash = "TO_VARCHAR(HASH(" + _csv(tracked, "E") + "))"
@@ -322,7 +353,7 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
         V_ROWS_READ := (SELECT COUNT(*) FROM ESF_NEW_EVENTS);
         V_DATA_MAX_AT := (SELECT MAX({freshness}) FROM ESF_NEW_EVENTS);
 
-        INSERT INTO {names.events_relation} (
+{conflict_guard}        INSERT INTO {names.events_relation} (
             {_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE, ESF_EVENT_HASH, ESF_CAPTURED_AT
         )
         SELECT
@@ -331,7 +362,7 @@ def render_apply_sql(pattern: str, names: PipelineNames, contract: dict[str, Any
             N.ESF_STREAM_ISUPDATE,
             TO_VARCHAR(HASH({_csv(columns, 'N')}, N.ESF_STREAM_ACTION)),
             CURRENT_TIMESTAMP()
-        FROM ESF_NEW_EVENTS N
+        FROM {deduped_input}
         WHERE NOT EXISTS (
             SELECT 1
             FROM {names.events_relation} E

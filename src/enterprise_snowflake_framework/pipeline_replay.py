@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from .pipeline_idempotency import (
+    IDEMPOTENCY_DECLARATIONS,
+    render_deduped_relation,
+    render_idempotency_conflict_guard,
+)
 from .pipeline_model import (
     PipelineNames,
+    _column_defs,
     _csv,
     _delete_expression,
     _join,
@@ -107,7 +113,19 @@ def _render_append_replay(names: PipelineNames, contract: dict[str, Any]) -> str
     idempotency = [str(value).upper() for value in contract.get("idempotency_key", [])]
     timestamp_column = _replay_timestamp(contract)
     row_filter = _range_filter(timestamp_column)
-    dedup = _join("T", "B", idempotency)
+    new_defs = _column_defs(contract)
+    dedup = _join("T", "N", idempotency)
+    conflict_guard = render_idempotency_conflict_guard(
+        "ESF_REPLAY_INPUT",
+        identity_columns=idempotency,
+        payload_columns=columns,
+    )
+    deduped_input = render_deduped_relation(
+        "ESF_REPLAY_INPUT",
+        identity_columns=idempotency,
+        payload_columns=columns,
+        output_alias="N",
+    )
     return f"""-- Candidate append replay. Bronze remains the source of recovery evidence.
 -- NULL bounds perform a deterministic full candidate rebuild. A bounded replay assumes the
 -- candidate already has a correct baseline outside the requested window.
@@ -124,29 +142,33 @@ DECLARE
     V_REPAIR_ID VARCHAR DEFAULT UUID_STRING();
     V_ROWS_READ NUMBER DEFAULT 0;
     V_ROWS_RECOVERED NUMBER DEFAULT 0;
-BEGIN
-{_range_guard(timestamp_column)}{_repair_start(names)}    BEGIN
+{IDEMPOTENCY_DECLARATIONS}BEGIN
+{_range_guard(timestamp_column)}    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_REPLAY_INPUT (
+{new_defs}
+    );
+
+    INSERT INTO ESF_REPLAY_INPUT ({_csv(columns)})
+    SELECT {_csv(columns, 'B')}
+    FROM {names.bronze_relation} B
+    WHERE {row_filter};
+
+    V_ROWS_READ := (SELECT COUNT(*) FROM ESF_REPLAY_INPUT);
+
+{_repair_start(names)}    BEGIN
         BEGIN TRANSACTION;
 
-        IF (P_FROM IS NULL AND P_TO IS NULL) THEN
+{conflict_guard}        IF (P_FROM IS NULL AND P_TO IS NULL) THEN
             DELETE FROM {names.physical_relation};
         END IF;
 
-        V_ROWS_READ := (
-            SELECT COUNT(*)
-            FROM {names.bronze_relation} B
-            WHERE {row_filter}
-        );
-
         INSERT INTO {names.physical_relation} ({_csv(columns)}, ESF_LOADED_AT)
-        SELECT {_csv(columns, 'B')}, CURRENT_TIMESTAMP()
-        FROM {names.bronze_relation} B
-        WHERE {row_filter}
-          AND NOT EXISTS (
-              SELECT 1
-              FROM {names.physical_relation} T
-              WHERE {dedup}
-          );
+        SELECT {_csv(columns, 'N')}, CURRENT_TIMESTAMP()
+        FROM {deduped_input}
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM {names.physical_relation} T
+            WHERE {dedup}
+        );
 
         V_ROWS_RECOVERED := SQLROWCOUNT;
         COMMIT;
@@ -274,7 +296,21 @@ def _render_scd2_replay(names: PipelineNames, contract: dict[str, Any]) -> str:
         replay_action = f"IFF(UPPER(COALESCE(TO_VARCHAR(B.{op}), '')) IN ({values}), 'DELETE', 'INSERT')"
     else:
         replay_action = "'INSERT'"
-    dedup = _join("E", "B", idempotency) + f" AND E.ESF_STREAM_ACTION = {replay_action}"
+    event_identity = [*idempotency, "ESF_STREAM_ACTION"]
+    event_payload = [*columns, "ESF_STREAM_ACTION", "ESF_STREAM_ISUPDATE"]
+    new_defs = _column_defs(contract)
+    dedup = _join("E", "N", idempotency) + " AND E.ESF_STREAM_ACTION = N.ESF_STREAM_ACTION"
+    conflict_guard = render_idempotency_conflict_guard(
+        "ESF_REPLAY_INPUT",
+        identity_columns=event_identity,
+        payload_columns=event_payload,
+    )
+    deduped_input = render_deduped_relation(
+        "ESF_REPLAY_INPUT",
+        identity_columns=event_identity,
+        payload_columns=event_payload,
+        output_alias="N",
+    )
     affected_events = _join("E", "K", business_key)
     affected_history = _join("H", "K", business_key)
     state_hash = "TO_VARCHAR(HASH(" + _csv(tracked, "E") + "))"
@@ -299,15 +335,29 @@ DECLARE
     V_REPAIR_ID VARCHAR DEFAULT UUID_STRING();
     V_ROWS_READ NUMBER DEFAULT 0;
     V_ROWS_RECOVERED NUMBER DEFAULT 0;
-BEGIN
+{IDEMPOTENCY_DECLARATIONS}BEGIN
+    CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_REPLAY_INPUT (
+{new_defs},
+        ESF_STREAM_ACTION VARCHAR NOT NULL,
+        ESF_STREAM_ISUPDATE BOOLEAN NOT NULL
+    );
+
     CREATE OR REPLACE PROCEDURE SCOPED TEMP TABLE ESF_AFFECTED_KEYS (
 {key_defs}
     );
 
+    INSERT INTO ESF_REPLAY_INPUT ({_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE)
+    SELECT {_csv(columns, 'B')}, {replay_action}, FALSE
+    FROM {names.bronze_relation} B
+    WHERE (:P_FROM IS NULL OR B.{source_timestamp} >= :P_FROM)
+      AND (:P_TO IS NULL OR B.{source_timestamp} < :P_TO);
+
+    V_ROWS_READ := (SELECT COUNT(*) FROM ESF_REPLAY_INPUT);
+
 {_repair_start(names)}    BEGIN
         BEGIN TRANSACTION;
 
-        IF (P_FROM IS NULL AND P_TO IS NULL) THEN
+{conflict_guard}        IF (P_FROM IS NULL AND P_TO IS NULL) THEN
             DELETE FROM {names.history_relation};
             DELETE FROM {names.events_relation};
         END IF;
@@ -316,27 +366,21 @@ BEGIN
             {_csv(columns)}, ESF_STREAM_ACTION, ESF_STREAM_ISUPDATE, ESF_EVENT_HASH, ESF_CAPTURED_AT
         )
         SELECT
-            {_csv(columns, 'B')},
-            {replay_action},
-            FALSE,
-            TO_VARCHAR(HASH({_csv(columns, 'B')}, {replay_action})),
+            {_csv(columns, 'N')},
+            N.ESF_STREAM_ACTION,
+            N.ESF_STREAM_ISUPDATE,
+            TO_VARCHAR(HASH({_csv(columns, 'N')}, N.ESF_STREAM_ACTION)),
             CURRENT_TIMESTAMP()
-        FROM {names.bronze_relation} B
-        WHERE (:P_FROM IS NULL OR B.{source_timestamp} >= :P_FROM)
-          AND (:P_TO IS NULL OR B.{source_timestamp} < :P_TO)
-          AND NOT EXISTS (
-              SELECT 1
-              FROM {names.events_relation} E
-              WHERE {dedup}
-          );
-
-        V_ROWS_READ := SQLROWCOUNT;
+        FROM {deduped_input}
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM {names.events_relation} E
+            WHERE {dedup}
+        );
 
         INSERT INTO ESF_AFFECTED_KEYS ({_csv(business_key)})
         SELECT DISTINCT {_csv(business_key, 'B')}
-        FROM {names.bronze_relation} B
-        WHERE (:P_FROM IS NULL OR B.{source_timestamp} >= :P_FROM)
-          AND (:P_TO IS NULL OR B.{source_timestamp} < :P_TO);
+        FROM ESF_REPLAY_INPUT B;
 
         DELETE FROM {names.history_relation} H
         USING ESF_AFFECTED_KEYS K
