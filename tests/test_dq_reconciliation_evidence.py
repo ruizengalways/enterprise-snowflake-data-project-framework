@@ -105,7 +105,6 @@ class DataQualityReconciliationEvidenceTests(unittest.TestCase):
     def test_record_apis_fail_closed_for_unknown_status_or_severity(self) -> None:
         sql = self._control_sql()
         self.assertIn("UPPER(COALESCE(:P_STATUS, '')) IN ('PASS', 'FAIL')", sql)
-        self.assertIn("ELSE 'INVALID'", sql.replace(")", ")")) if False else None
         self.assertIn("'INVALID'", sql)
         self.assertIn("UPPER(COALESCE(:P_CHECK_SEVERITY, '')) = 'WARN'", sql)
         self.assertIn("UPPER(STATUS) <> 'PASS'", sql)
@@ -178,9 +177,12 @@ class DataQualityReconciliationEvidenceTests(unittest.TestCase):
         self.assertIn("VALIDATE_FLEET_MSSQL_CUSTOMER_V2", task)
         control = self._control_sql()
         self.assertIn("Q.VERSION = D.ACTIVE_VERSION", control)
-        self.assertIn("candidate DQ evidence", (
-            self.root / "operations" / "reconciliation" / "README.md"
-        ).read_text(encoding="utf-8"))
+        self.assertIn(
+            "candidate DQ evidence",
+            (self.root / "operations" / "reconciliation" / "README.md").read_text(
+                encoding="utf-8"
+            ),
+        )
 
     def test_reconciliation_guidance_does_not_assume_count_equality(self) -> None:
         readme = (self.root / "operations" / "reconciliation" / "README.md").read_text(
