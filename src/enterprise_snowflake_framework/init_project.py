@@ -58,6 +58,7 @@ PROJECT_TEMPLATE_FILES = {
     "control_plane/sql/060_run_evidence_api.sql": "control_plane_060_run_evidence_api.sql",
     "control_plane/sql/070_enterprise_health_export.sql": "control_plane_070_enterprise_health_export.sql",
     "control_plane/sql/080_data_quality_reconciliation.sql": "control_plane_080_data_quality_reconciliation.sql",
+    "control_plane/sql/090_dataset_execution_model.sql": "control_plane_090_dataset_execution_model.sql",
     "dbt/README.md": "dbt_README.md",
     "dbt/dbt_project.yml": "dbt_project.yml",
     "dbt/profiles.yml": "profiles.yml",
