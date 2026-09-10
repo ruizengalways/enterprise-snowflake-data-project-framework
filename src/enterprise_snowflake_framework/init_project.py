@@ -24,6 +24,7 @@ PROJECT_DIRECTORIES = (
     "operations/release",
     "operations/sla",
     "operations/lifecycle",
+    "operations/reconciliation",
     "docs",
     ".github/workflows",
 )
@@ -56,6 +57,7 @@ PROJECT_TEMPLATE_FILES = {
     "control_plane/sql/050_dataset_lifecycle_status.sql": "control_plane_050_dataset_lifecycle_status.sql",
     "control_plane/sql/060_run_evidence_api.sql": "control_plane_060_run_evidence_api.sql",
     "control_plane/sql/070_enterprise_health_export.sql": "control_plane_070_enterprise_health_export.sql",
+    "control_plane/sql/080_data_quality_reconciliation.sql": "control_plane_080_data_quality_reconciliation.sql",
     "dbt/README.md": "dbt_README.md",
     "dbt/dbt_project.yml": "dbt_project.yml",
     "dbt/profiles.yml": "profiles.yml",
@@ -67,6 +69,7 @@ PROJECT_TEMPLATE_FILES = {
     "operations/release/README.md": "release_README.md",
     "operations/sla/README.md": "sla_README.md",
     "operations/lifecycle/README.md": "lifecycle_README.md",
+    "operations/reconciliation/README.md": "reconciliation_README.md",
     "docs/DOMAIN_DECOMMISSION.md": "domain_decommission.md",
     "docs/ENTERPRISE_HEALTH_EXPORT.md": "enterprise_health_export.md",
 }

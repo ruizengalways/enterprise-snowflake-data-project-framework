@@ -17,8 +17,10 @@ class EnterpriseHealthExportTests(unittest.TestCase):
 
     def test_fresh_project_exports_stable_domain_health_contract(self) -> None:
         sql_path = self.root / "control_plane" / "sql" / "070_enterprise_health_export.sql"
+        quality_path = self.root / "control_plane" / "sql" / "080_data_quality_reconciliation.sql"
         doc_path = self.root / "docs" / "ENTERPRISE_HEALTH_EXPORT.md"
         self.assertTrue(sql_path.is_file())
+        self.assertTrue(quality_path.is_file())
         self.assertTrue(doc_path.is_file())
 
         sql = sql_path.read_text(encoding="utf-8")
@@ -33,8 +35,15 @@ class EnterpriseHealthExportTests(unittest.TestCase):
         self.assertNotIn("UPDATE CONTROL", sql)
         self.assertNotIn("CREATE TASK", sql)
 
+        quality = quality_path.read_text(encoding="utf-8")
+        self.assertIn("DQ_STATUS", quality)
+        self.assertIn("RECONCILIATION_STATUS", quality)
+        self.assertIn("CREATE OR REPLACE VIEW CONTROL.ENTERPRISE_HEALTH_EXPORT_V", quality)
+        self.assertIn("DQ_FAILED_DATASET_COUNT", quality)
+
         manifest = (self.root / "control_plane" / "deploy_manifest.txt").read_text(encoding="utf-8")
         self.assertIn("control_plane/sql/070_enterprise_health_export.sql", manifest)
+        self.assertIn("control_plane/sql/080_data_quality_reconciliation.sql", manifest)
         self.assertTrue(build_control_plan(self.root).ready)
 
     def test_enterprise_guidance_keeps_cross_domain_layer_read_only(self) -> None:
@@ -61,19 +70,25 @@ class EnterpriseHealthExportTests(unittest.TestCase):
         )
         manifest.write_text(old_manifest, encoding="utf-8")
         export_sql = self.root / "control_plane" / "sql" / "070_enterprise_health_export.sql"
+        quality_sql = self.root / "control_plane" / "sql" / "080_data_quality_reconciliation.sql"
         export_doc = self.root / "docs" / "ENTERPRISE_HEALTH_EXPORT.md"
         export_sql.unlink()
+        quality_sql.unlink()
         export_doc.unlink()
 
         initialize_project(self.root)
 
         self.assertEqual(old_manifest, manifest.read_text(encoding="utf-8"))
         self.assertTrue(export_sql.is_file())
+        self.assertTrue(quality_sql.is_file())
         self.assertTrue(export_doc.is_file())
         plan = build_control_plan(self.root)
         self.assertFalse(plan.ready)
         self.assertEqual(
-            ("control_plane/sql/070_enterprise_health_export.sql",),
+            (
+                "control_plane/sql/070_enterprise_health_export.sql",
+                "control_plane/sql/080_data_quality_reconciliation.sql",
+            ),
             plan.missing_from_manifest,
         )
 

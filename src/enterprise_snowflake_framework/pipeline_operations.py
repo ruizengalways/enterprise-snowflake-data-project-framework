@@ -17,10 +17,14 @@ def render_task_sql(pattern: str, names: PipelineNames, project_code: str) -> st
     )
     return f"""{readiness}
 -- Snowflake creates new tasks suspended. Validation and activation are explicit.
+-- One task run applies the transformation and then records dataset-local structural DQ evidence.
 CREATE OR REPLACE TASK {names.task}
     WAREHOUSE = WH_{project_code}_TRANSFORM{when}
 AS
+BEGIN
     CALL {names.apply_procedure}();
+    CALL {names.validate_procedure}();
+END;
 
 -- Triggered task activation after validation:
 -- ALTER TASK {names.task} RESUME;
@@ -148,6 +152,7 @@ def render_deploy_fragment(names: PipelineNames, *, candidate: bool) -> str:
         f"{base}/001_objects.sql",
         f"{base}/010_apply.sql",
         f"{base}/015_replay.sql",
+        f"{base}/020_validate.sql",
         f"{base}/030_task.sql",
         f"{base}/040_register.sql",
     ]
@@ -199,7 +204,7 @@ WHERE IS_ACTIVE = TRUE;"""
             else f"-- {new.task} has no readiness schedule by default; configure it or use EXECUTE TASK explicitly."
         )
         return f"""-- Explicit cutover: {new.dataset_key} {old.version} -> {new.version}
--- Review VERSION_VALIDATION before running. This file is never auto-executed by scaffold.
+-- Review VERSION_VALIDATION and candidate DQ evidence before running. This file is never auto-executed by scaffold.
 
 ALTER TASK {old.task} SUSPEND;
 
