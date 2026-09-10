@@ -3,7 +3,11 @@
 This repository owns production data-pipeline source code and operational control for one Snowflake business domain.
 
 ```text
-Source -> Ingestion -> BRONZE -> Stream/readiness -> Task -> domain-owned SQL/procedure -> SILVER -> dbt -> GOLD -> SEMANTIC
+Source -> Ingestion -> BRONZE -> SILVER -> dbt -> GOLD_MARTS -> SEMANTIC
+                         ^
+                         | explicit Stream/Task, Dynamic Table, batch SQL or domain-owned custom execution
+
+CONTROL = cross-cutting operational evidence, health, lifecycle and release state
 ```
 
 A domain may contain many source systems. New generated Snowflake object names preserve the source boundary so same-named datasets from different sources do not collide by default.
@@ -15,42 +19,37 @@ missing ownership unit -> create
 existing ownership unit -> never overwrite
 ```
 
-This applies to RAW contract drafts/formal contracts, source-manifest dataset declarations, dataset roots, candidate `versions/vN/` directories and generated SLA/lifecycle/repair/release files.
+This applies to RAW contract drafts/formal contracts, source-manifest dataset declarations, dataset roots, candidate `versions/vN/` directories and generated operational bundles.
 
 This project owns a domain-local control plane under `control_plane/`. The committed SQL creates this domain's `CONTROL` schema, operational ledgers, version/SLA state, quality evidence, health evaluation, incident lifecycle and dashboard-ready views. It is not a shared global runtime database.
 
 Operational evidence follows one domain contract:
 
 ```text
-source-specific ingestion -> CONTROL.INGESTION_RUN
-Silver apply procedure    -> CONTROL.PIPELINE_RUN
-Silver validation         -> CONTROL.DQ_RESULT
-dbt model result          -> CONTROL.DBT_RUN
-reconciliation code       -> CONTROL.RECONCILIATION_RESULT
+source-specific ingestion  -> CONTROL.INGESTION_RUN
+explicit Silver apply      -> CONTROL.PIPELINE_RUN
+Silver validation          -> CONTROL.DQ_RESULT
+dbt model result           -> CONTROL.DBT_RUN
+reconciliation code        -> CONTROL.RECONCILIATION_RESULT
+release/rollback attempt   -> CONTROL.RELEASE_RUN
+health cadence operation   -> CONTROL.HEALTH_EVALUATION_CHANGE
 ```
 
-See `ingestion/RUN_EVIDENCE.md`, `operations/reconciliation/README.md` and `dbt/README.md`. Ingestion remains source-specific; the ledger API does not replace Openflow, Snowpipe, Kafka, Talend, ADF or project-specific ingestion.
+See `ingestion/RUN_EVIDENCE.md`, `operations/reconciliation/README.md`, `operations/health/README.md` and `dbt/README.md`. Ingestion remains source-specific; the ledger API does not replace Openflow, Snowpipe, Kafka, Talend, ADF or project-specific ingestion.
 
-Standard scaffolded `020_validate.sql` is dataset-local source code. It records small structural checks after a successful apply. Business DQ rules remain domain-owned. Reconciliation logic is never inferred; the project computes the comparison that is valid for the source/pattern and records normalized evidence when useful.
+Standard scaffolded `020_validate.sql` is dataset-local source code. It records small structural checks after a successful apply. Business DQ rules remain domain-owned. Reconciliation logic is never inferred; the project computes the comparison valid for its source/pattern and records normalized evidence when useful.
 
-Enterprise monitoring reads the domain's stable `CONTROL.ENTERPRISE_HEALTH_EXPORT_V` / `CONTROL.DOMAIN_HEALTH_SUMMARY_V`; see `docs/ENTERPRISE_HEALTH_EXPORT.md`. Cross-domain monitoring remains read-only. Active-version DQ/reconciliation failures can affect production health; candidate evidence remains for shadow/release review.
+Enterprise monitoring reads the domain's stable `CONTROL.ENTERPRISE_HEALTH_EXPORT_V` / `CONTROL.DOMAIN_HEALTH_SUMMARY_V`. Cross-domain monitoring remains read-only. Active-version DQ/reconciliation failures can affect production health; candidate evidence remains for shadow/release review.
 
 ## RAW contract -> dataset workflow
 
-Source profiling/discovery is outside this Framework. If a formal RAW contract is not ready yet, create an isolated draft that is ignored by production validation:
+Source profiling/discovery is outside this Framework. If a formal RAW contract is not ready yet, create an isolated draft that production validation ignores:
 
 ```bash
 esf add-source <source_id> --project-root .
-
-esf raw-contract-draft <dataset> \
-  --source <source_id> \
-  --project-root .
-
+esf raw-contract-draft <dataset> --source <source_id> --project-root .
 # Edit contracts/drafts/<source_id>/<dataset>.yml and resolve every TODO.
-
-esf raw-contract-finalize <dataset> \
-  --source <source_id> \
-  --project-root .
+esf raw-contract-finalize <dataset> --source <source_id> --project-root .
 ```
 
 `raw-contract-finalize` validates the reviewed draft and moves the exact bytes into `contracts/raw/<source>/<dataset>.yml`. It never overwrites an existing formal contract and does not declare or scaffold the dataset.
@@ -58,22 +57,53 @@ esf raw-contract-finalize <dataset> \
 Then register the reviewed contract and inspect the plan before scaffolding:
 
 ```bash
-esf add-dataset <dataset> \
-  --source <source_id> \
-  --pattern scd2 \
-  --project-root .
-
+esf add-dataset <dataset> --source <source_id> --pattern scd2 --project-root .
 esf plan --source <source_id> --project-root .
 esf scaffold-preview <dataset> --source <source_id> --project-root .
 esf scaffold-all --source <source_id> --project-root .
 esf validate --project-root .
 ```
 
-`add-dataset` only appends a missing `datasets.<dataset>` declaration to the source manifest. It defaults `raw_contract` to `contracts/raw/<source>/<dataset>.yml`, requires that contract to exist under the same source, preserves existing YAML comments/order through round-trip editing, never edits an existing dataset declaration and never scaffolds SQL.
+`add-dataset` only appends a missing dataset declaration to the source manifest. Existing declarations remain domain-owned.
 
-Run `esf control-plan --project-root .` when adopting Framework control-plane upgrades; existing deploy manifests are never rewritten automatically. Migration 080 adds DQ/reconciliation evidence and a separate serverless quality-incident task that is created suspended.
+## Version execution policy
 
-Define an SLA only after the domain agrees the operational expectation:
+Logical pattern belongs to the dataset. Execution technology and runtime policy belong to the implementation version.
+
+For a new `stream_task` version, the Framework can explicitly declare Task warehouse, minimum trigger interval, timeout, suspend-after-failures and optional error integration. Those settings are not SLA policy and do not belong in the source manifest.
+
+Dynamic Table target lag, warehouse and refresh mode are likewise version execution settings, not logical freshness guarantees.
+
+## Control Plane upgrades
+
+Run:
+
+```bash
+esf init-project --project-root .
+esf control-plan --project-root .
+```
+
+when adopting Framework Control Plane upgrades. `init-project` may materialize newly introduced migration files, but it never rewrites this repository's existing `control_plane/deploy_manifest.txt`. Review and append newly adopted migrations explicitly without reordering applied history.
+
+Migration `130_health_evaluation_cadence.sql` makes the **domain health evaluator schedule** configurable without changing released `040_health_task.sql`. Migration 130 only creates an audit/read contract; it does not silently retune the Task.
+
+After 130 is applied, generate a reviewed cadence change with an explicit final Task state:
+
+```bash
+esf health-cadence-sql health-every-5m \
+  --interval-seconds 300 \
+  --reason "Five-minute health evaluation is appropriate for this domain" \
+  --resume-after \
+  --project-root .
+```
+
+Use `--leave-suspended` when that is the intended final state. Review `operations/health/<operation-id>/preflight.sql`, `operation.sql` and `postflight.sql`; the CLI never executes them.
+
+Domain health evaluator cadence is operational control policy. It is deliberately separate from logical dataset SLA.
+
+## SLA, lifecycle, candidate and repair operations
+
+Define SLA only after the domain agrees the operational expectation:
 
 ```bash
 esf sla-sql <dataset> freshness_v1 \
@@ -89,9 +119,6 @@ Generate explicit lifecycle operations instead of directly mutating production f
 ```bash
 esf lifecycle-sql <dataset> pause_incident_123 \
   --source <source_id> --action pause --version v1 --project-root .
-
-esf lifecycle-sql <dataset> decommission_2026q4 \
-  --source <source_id> --action decommission --project-root .
 ```
 
 Candidate / repair / release flow:
@@ -103,6 +130,6 @@ esf repair-sql <dataset> v2 --source <source_id> --project-root .
 esf release-sql <dataset> --source <source_id> --from-version v1 --to-version v2 --project-root .
 ```
 
-Review candidate DQ evidence together with version comparison evidence before cutover. `control-plan` and `repair-plan` are read-only. `sla-sql`, `lifecycle-sql`, `repair-sql` and `release-sql` generate reviewable files only. They do not connect to Snowflake or execute production changes.
+Review candidate runtime, DQ and version-comparison evidence before cutover. `control-plan`, `repair-plan` and `upgrade-plan` are read-only. SQL-generating commands create reviewable files only; they do not connect to Snowflake or execute production changes.
 
 For domain shutdown, follow `docs/DOMAIN_DECOMMISSION.md`. Decommission is staged: stop movement and consumers first, preserve evidence for the agreed retention window, then perform physical/infrastructure cleanup in a separate approved change.
