@@ -95,6 +95,7 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
 
         (self.root / "control_plane" / "sql" / "060_run_evidence_api.sql").unlink()
         (self.root / "control_plane" / "sql" / "070_enterprise_health_export.sql").unlink()
+        (self.root / "control_plane" / "sql" / "080_data_quality_reconciliation.sql").unlink()
         (self.root / "dbt" / "macros" / "esf_observability.sql").unlink()
         (self.root / "dbt" / "README.md").unlink()
         (self.root / "ingestion" / "RUN_EVIDENCE.md").unlink()
@@ -106,6 +107,7 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
         self.assertEqual(old_dbt_project, dbt_project.read_text(encoding="utf-8"))
         self.assertTrue((self.root / "control_plane" / "sql" / "060_run_evidence_api.sql").is_file())
         self.assertTrue((self.root / "control_plane" / "sql" / "070_enterprise_health_export.sql").is_file())
+        self.assertTrue((self.root / "control_plane" / "sql" / "080_data_quality_reconciliation.sql").is_file())
         self.assertTrue((self.root / "dbt" / "macros" / "esf_observability.sql").is_file())
         self.assertTrue((self.root / "ingestion" / "RUN_EVIDENCE.md").is_file())
 
@@ -115,6 +117,7 @@ class RunEvidenceIntegrationTests(unittest.TestCase):
             (
                 "control_plane/sql/060_run_evidence_api.sql",
                 "control_plane/sql/070_enterprise_health_export.sql",
+                "control_plane/sql/080_data_quality_reconciliation.sql",
             ),
             plan.missing_from_manifest,
         )
