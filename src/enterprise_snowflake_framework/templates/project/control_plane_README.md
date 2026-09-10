@@ -4,25 +4,32 @@ This directory belongs to this domain repository. It is not a shared writable pl
 
 The SQL under `control_plane/sql/` is designed to run in the domain database context and create a local `CONTROL` schema.
 
-Apply the files in order:
+Apply committed files in `deploy_manifest.txt` order. The current starter contains:
 
 ```text
 001_objects.sql
 010_observability_views.sql
 020_refresh_health.sql
+030_sla_incident_lifecycle.sql
+040_health_task.sql
+050_dataset_lifecycle_status.sql
+060_run_evidence_api.sql
 ```
 
-The first implementation provides the operational foundation for:
+The control plane provides:
 
-- logical dataset registry
+- logical dataset registry and lifecycle state
 - dataset versions
-- SLA policies
+- SLA policies and cadence evaluation
 - ingestion / Silver / dbt run ledgers
 - current dataset health
-- incidents
+- automatic ingestion/pipeline/dbt/SLA incidents
 - version validation
 - repair audit
 - dashboard-ready views
+- a small ingestion run-evidence API
+
+`060_run_evidence_api.sql` standardizes how source-specific ingestion records BEGIN/SUCCESS/FAILED evidence and extends `DBT_RUN` with invocation/resource identity. It does **not** orchestrate ingestion or own connector checkpoints.
 
 The control plane records operational state and evidence. It does not dynamically route SCD patterns or generate transformation SQL at runtime.
 

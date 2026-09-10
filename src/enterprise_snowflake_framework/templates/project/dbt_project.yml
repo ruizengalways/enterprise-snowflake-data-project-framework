@@ -6,6 +6,9 @@ model-paths: ['models']
 test-paths: ['tests']
 clean-targets: ['target', 'dbt_packages']
 
+on-run-end:
+  - "{{ esf_record_dbt_results(results) }}"
+
 models:
   __PROJECT_CODE_LOWER__:
     +materialized: view

@@ -36,6 +36,7 @@ jobs:
     environment: ${{ inputs.environment }}
     env:
       ESF_ENVIRONMENT: ${{ inputs.environment }}
+      ESF_PROJECT_GIT_SHA: ${{ inputs.git_sha }}
       DBT_AUTHENTICATOR: workload_identity
       DBT_DEFAULT_SCHEMA: GOLD_MARTS
       SNOWFLAKE_ENHANCED_EXIT_CODES: "1"
