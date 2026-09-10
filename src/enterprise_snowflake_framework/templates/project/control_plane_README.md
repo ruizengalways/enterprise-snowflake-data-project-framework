@@ -4,7 +4,7 @@ This directory belongs to this domain repository. It is not a shared writable pl
 
 The SQL under `control_plane/sql/` is designed to run in the domain database context and create a local `CONTROL` schema.
 
-Apply committed files in `deploy_manifest.txt` order. The current starter contains:
+Committed paths in `deploy_manifest.txt` are ordered **migrations**, not a list to replay in full on every deployment. The current starter contains:
 
 ```text
 001_objects.sql
@@ -18,6 +18,14 @@ Apply committed files in `deploy_manifest.txt` order. The current starter contai
 080_data_quality_reconciliation.sql
 ```
 
+The reusable deployment workflow uses `esf-migrate deploy` to create/use `CONTROL.DEPLOYMENT_HISTORY`, checksum the exact committed file bytes and apply only unseen CONTROL/SILVER paths. An already applied/baselined path with the same checksum is skipped. Changed checksum, removed/reordered history, duplicate manifest paths, or unresolved STARTED/FAILED attempts block deployment.
+
+`CONTROL.DEPLOYMENT_HISTORY` itself is created by the migration runner's tiny idempotent bootstrap because the ledger must exist before the first normal migration can be tracked.
+
+For an **existing populated domain adopting apply-once deployment**, do not let the first migration-runner deployment replay the historical manifests. The runner detects existing CONTROL/SILVER objects with empty history and blocks. Review the exact environment against the exact project Git SHA, then explicitly run `esf-migrate baseline ... --confirm-existing-state-reviewed`. Baseline records the existing committed paths and checksums without executing those files.
+
+After a migration has been recorded as SUCCEEDED/BASELINED/REMEDIATED in an environment, treat its path and bytes as immutable. Add a later migration for corrections. Do not edit the applied file in place.
+
 The control plane provides:
 
 - logical dataset registry and lifecycle state
@@ -30,6 +38,7 @@ The control plane provides:
 - optional automatic DQ/reconciliation incidents
 - version validation
 - repair audit
+- deployment history
 - dashboard-ready views
 - a small ingestion run-evidence API
 - stable DQ/reconciliation evidence APIs
@@ -53,7 +62,7 @@ Use:
 esf control-plan --project-root .
 ```
 
-for the human-readable upgrade report. Review and explicitly add any required migration to the manifest in Framework order.
+for the human-readable upgrade report. Review and explicitly append required migrations.
 
 The reusable deployment workflow additionally runs:
 
@@ -61,9 +70,13 @@ The reusable deployment workflow additionally runs:
 esf-control-preflight --project-root .
 ```
 
-before Snowflake authentication. Deployment is blocked when a Framework-known migration is missing from the repo/manifest, duplicated, or out of Framework order. Domain-owned extra control migrations remain allowed; the normal manifest path/file checks still apply to them.
+before Snowflake authentication. Deployment is blocked when a Framework-known migration is missing from the repo/manifest, duplicated, or out of Framework relative order. Domain-owned extra control migrations remain allowed; the normal manifest path/file checks still apply to them.
 
-This gate never rewrites the manifest. See `docs/architecture/DEPLOYMENT_CONTROL_PREFLIGHT.md` in the Framework repository for the contract.
+After authentication, `esf-migrate deploy` enforces the environment-specific apply-once/checksum history. The preflight and migration runner are complementary: preflight checks the committed baseline before touching Snowflake; migration history decides whether each exact file is NEW, already applied, or blocked in that environment.
+
+The normal GitHub deployment path serializes one deployment per domain/environment with `cancel-in-progress: false` so two deployments do not race the same unseen migration.
+
+See `docs/architecture/DEPLOYMENT_CONTROL_PREFLIGHT.md` and `docs/architecture/APPLY_ONCE_MIGRATIONS.md` in the Framework repository.
 
 Enterprise monitoring may UNION the stable export views across domains, but must not write back into domain control schemas. Cross-domain roles/grants belong in platform infrastructure.
 

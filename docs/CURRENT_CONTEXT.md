@@ -66,6 +66,47 @@ New standard dataset starters include explicit object/apply/replay/validation/ta
 
 A normal generated Task executes the dataset-local apply procedure and then its dataset-local validation procedure. `020_validate.sql` is committed, version-specific source code; it is not interpreted from runtime rule metadata.
 
+## Apply-once deployment
+
+CONTROL and SILVER manifests are ordered apply-once migration manifests, not files to replay in full on every deployment.
+
+The reusable deployment flow is:
+
+```text
+immutable project Git SHA + immutable Framework SHA
+  -> esf validate
+  -> esf-control-preflight
+  -> manifest path/file safety checks
+  -> GitHub OIDC / Snowflake WIF
+  -> bootstrap CONTROL.DEPLOYMENT_HISTORY
+  -> esf-migrate deploy
+       CONTROL new files -> APPLY
+       CONTROL recorded identical files -> SKIP
+       SILVER new files -> APPLY
+       SILVER recorded identical files -> SKIP
+       drift / partial state -> BLOCK
+  -> dbt debug
+  -> dbt build
+```
+
+`CONTROL.DEPLOYMENT_HISTORY` is environment-local and records migration path, exact-file SHA-256, manifest position, project/framework Git SHAs, attempt status/timestamps, errors, GitHub run ID and operator reason when applicable.
+
+Once an environment records a migration as `SUCCEEDED`, `BASELINED` or `REMEDIATED`, its path, checksum and manifest position are immutable there. Removing/reordering an applied path or changing its bytes blocks deployment. Future changes append a new migration path or use a new dataset implementation version.
+
+`STARTED` and `FAILED` block rather than retry automatically. Snowflake DDL can partially commit before a later statement in the same file fails; an engineer must inspect/repair partial state and may then explicitly record remediation with `esf-migrate resolve`. Resolve does not re-execute the failed file.
+
+Existing populated domains cannot be safely inferred as fresh. If CONTROL/SILVER objects exist while deployment history is empty, normal migration deployment blocks. The engineer must check out/review the exact already-deployed project revision and use `esf-migrate baseline --confirm-existing-state-reviewed`; baseline records those manifest files/checksums as `BASELINED` and executes zero historical migration files. Fresh empty domains must use normal first deployment, not baseline.
+
+The normal GitHub path serializes deployments per domain/environment with `cancel-in-progress: false`.
+
+Framework-released numbered control migration templates are immutable after release. A later correction adds a later numbered migration instead of editing 001..080 in place. Framework CI enforces this on pull requests.
+
+Manifest position, not filename sorting, is the environment history contract. If a domain has already appended its own migration and a later Framework migration is introduced, append the new Framework migration without reordering already-recorded entries even when the resulting numeric filenames are not visually sorted.
+
+dbt deliberately remains desired-state and runs on every deployment. Release/repair/lifecycle/SLA operation scripts remain explicit engineer-run operations outside the normal migration runner.
+
+See `docs/architecture/APPLY_ONCE_MIGRATIONS.md`.
+
 ## Data quality and reconciliation
 
 Control migration 080 adds normalized evidence rather than a generic DQ engine:
@@ -97,11 +138,11 @@ DQ evidence is version-specific. Only the active implementation version contribu
 
 Each domain owns its own `CONTROL` schema. Do not create one shared writable `PLATFORM_CONTROL` database across all domains.
 
-The control plane includes dataset/version identity, lifecycle, SLA policy, ingestion/pipeline/dbt run evidence, DQ/reconciliation evidence, health, incidents, version validation and repair audit.
+The control plane includes dataset/version identity, lifecycle, SLA policy, ingestion/pipeline/dbt run evidence, DQ/reconciliation evidence, health, incidents, version validation, repair audit and deployment history.
 
 Logical dataset lifecycle is explicit: `ACTIVE`, `PAUSED`, `DECOMMISSIONED`.
 
-Control-plane upgrades remain explicit. Rerunning `init-project` creates newly introduced missing files without overwriting existing files or the domain-owned deploy manifest. `esf control-plan` reports repo/manifest gaps. Fresh projects include migrations through `080_data_quality_reconciliation.sql`.
+Control-plane upgrades remain explicit. Rerunning `init-project` creates newly introduced missing files without overwriting existing files or the domain-owned deploy manifest. `esf control-plan` reports repo/manifest gaps. `esf-control-preflight` fails deployment when the selected Framework baseline is incomplete. Fresh projects include migrations through `080_data_quality_reconciliation.sql`.
 
 ## Enterprise health export
 
@@ -141,10 +182,12 @@ The default SCD2 model is one physical history table per implementation version.
 Candidate versions live under `silver_processing/<source>/<dataset>/versions/vN/` and own independent physical objects, Stream/Task where appropriate, apply/replay procedures and validation SQL. Creating v2 changes zero bytes in v1.
 
 ```text
-scaffold -> deploy -> bootstrap/replay -> catch up -> shadow -> validate -> compare -> release SQL -> explicit cutover
+scaffold -> deploy candidate migrations once -> bootstrap/replay -> catch up -> shadow -> validate -> compare -> release SQL -> explicit cutover
 ```
 
 Candidate DQ evidence remains version-specific and must be reviewed together with version comparison evidence before release. `release-sql` generates activate/rollback SQL for review; `esf` never executes it and does not automatically approve a candidate.
+
+An important consequence of apply-once deployment is that a later redeploy no longer re-executes v1 `050_publish.sql`, so an explicit v2 cutover is not silently undone by replaying old published-view DDL.
 
 ## SLA and observability
 
@@ -186,6 +229,6 @@ These remain exploratory domain work. The Framework keeps skeletons/examples but
 
 ## Architectural guardrails
 
-Continue to reject source-profiling/discovery inside this repo, deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, connector offset/checkpoint ownership, generic executable DQ rules in CONTROL, naive universal reconciliation, shared writable cross-domain control planes, hidden active-version switching, automatic production repair execution, automatic business-key/SCD/SLA inference, destructive one-click decommission and automatic business Mart/KPI/Semantic generation.
+Continue to reject source-profiling/discovery inside this repo, deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, connector offset/checkpoint ownership, generic executable DQ rules in CONTROL, naive universal reconciliation, shared writable cross-domain control planes, hidden active-version switching, automatic production repair execution, automatic failed-migration retry, automatic migration baseline inference, automatic business-key/SCD/SLA inference, destructive one-click decommission and automatic business Mart/KPI/Semantic generation.
 
-The control plane may centralize operational health/version/incident/lifecycle/run-evidence/quality-evidence logic inside a domain, but must not hide dataset transformation or business-quality behavior.
+The control plane may centralize operational health/version/incident/lifecycle/run-evidence/quality-evidence/deployment-history logic inside a domain, but must not hide dataset transformation or business-quality behavior.

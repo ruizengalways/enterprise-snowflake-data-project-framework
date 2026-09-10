@@ -9,7 +9,7 @@ Framework owns project creation and reusable operating patterns.
 Domain repositories own project evolution and production transformation code.
 ```
 
-The toolkit creates readable project/source/dataset starters, validates contracts, provides domain-local operational-control foundations, and supplies reusable CI/CD guardrails. Generated SQL is normal source code committed to the domain repository. Deployment executes committed source; it does not regenerate production transformation SQL from metadata.
+The toolkit creates readable project/source/dataset starters, validates contracts, provides domain-local operational-control foundations, and supplies reusable CI/CD guardrails. Generated SQL is normal source code committed to the domain repository. CONTROL and SILVER deployment uses checksum-locked apply-once migrations; deployment does not regenerate production transformation SQL from metadata or replay every historical SQL file on every release.
 
 ## Architecture boundary
 
@@ -113,7 +113,7 @@ A fresh project contains committed control-plane migrations through:
 080_data_quality_reconciliation.sql
 ```
 
-The model includes dataset/version identity, SLA/lifecycle state, ingestion/pipeline/dbt run evidence, DQ/reconciliation evidence, dataset health, incidents, repair audit and version validation.
+The model includes dataset/version identity, SLA/lifecycle state, ingestion/pipeline/dbt run evidence, DQ/reconciliation evidence, dataset health, incidents, repair audit, version validation and environment-local deployment history.
 
 Operational evidence follows one domain contract:
 
@@ -126,6 +126,48 @@ reconciliation code       -> CONTROL.RECONCILIATION_RESULT
 ```
 
 The ingestion ledger API records evidence only; it does not replace connector runtimes or own offsets/checkpoints. New dbt projects include an `on-run-end` macro. Per-dataset Gold health is opt-in with `config.meta.esf_dataset_id` so cross-dataset business marts are not falsely assigned to one source dataset.
+
+## Apply-once deployment
+
+`control_plane/deploy_manifest.txt` and `silver_processing/deploy_manifest.txt` are ordered migration manifests, not full replay lists.
+
+The reusable deployment workflow runs:
+
+```text
+contract validation
+  -> control baseline preflight
+  -> manifest path validation
+  -> Snowflake OIDC authentication
+  -> bootstrap CONTROL.DEPLOYMENT_HISTORY
+  -> esf-migrate deploy
+       CONTROL: APPLY new / SKIP identical / BLOCK drift
+       SILVER:  APPLY new / SKIP identical / BLOCK drift
+  -> dbt debug
+  -> dbt build
+```
+
+Every migration is identified by repository-relative path, SHA-256 of the exact checked-out bytes, manifest position, project Git SHA and Framework Git SHA. `SUCCEEDED`, `BASELINED` and explicitly `REMEDIATED` files with the same checksum/position are skipped. Changed checksum, removed/reordered history, duplicate paths, or unresolved `STARTED`/`FAILED` attempts block deployment.
+
+A normal redeploy of the same Git SHA therefore executes zero previously recorded CONTROL/SILVER migration files.
+
+Existing populated environments with empty deployment history are not treated as fresh. The runner detects existing CONTROL/SILVER objects and blocks until an engineer explicitly baselines the reviewed current manifests:
+
+```bash
+esf-migrate baseline \
+  --project-root . \
+  --project-git-sha <domain-sha> \
+  --framework-git-sha <framework-sha> \
+  --reason "Reviewed existing environment state" \
+  --confirm-existing-state-reviewed
+```
+
+Baseline records the files and checksums without executing them. A partial `STARTED`/`FAILED` migration never retries automatically because Snowflake DDL can commit statement-by-statement. After inspecting/repairing partial state, an engineer may explicitly record remediation with `esf-migrate resolve ... --confirm-partial-state-reviewed`; that command also does not re-execute the migration.
+
+Once a migration is recorded in an environment, its path, bytes and manifest position are immutable there. Add a later migration or a new implementation version instead of editing the old file. Framework-released numbered control migration templates follow the same rule: future fixes append a later migration instead of changing a released numbered template.
+
+The reusable GitHub deployment workflow serializes deployments by domain/environment with `cancel-in-progress: false`.
+
+See `docs/architecture/APPLY_ONCE_MIGRATIONS.md`.
 
 ## Data quality and reconciliation
 
@@ -173,6 +215,7 @@ python -m pip install .
 
 esf init-project --project-root .
 esf control-plan --project-root .
+esf-control-preflight --project-root .
 esf add-source fleet_mssql --project-root .
 esf raw-contract-draft customer --source fleet_mssql --project-root .
 esf raw-contract-finalize customer --source fleet_mssql --project-root .
@@ -182,6 +225,12 @@ esf scaffold-preview customer --source fleet_mssql --project-root .
 esf scaffold scd2 customer --source fleet_mssql --project-root .
 esf scaffold-all --source fleet_mssql --project-root .
 esf scaffold-version customer v2 --source fleet_mssql --project-root .
+
+# Normal authenticated deployment runner; reusable GitHub workflow invokes this.
+esf-migrate deploy \
+  --project-root . \
+  --project-git-sha <domain-sha> \
+  --framework-git-sha <framework-sha>
 
 esf sla-sql customer freshness_v1 \
   --source fleet_mssql \
@@ -217,6 +266,8 @@ EXISTS
 
 A RAW draft is created once. A finalized RAW contract is never overwritten by finalization. Once a source-manifest dataset declaration exists, `add-dataset` never changes it. Once `silver_processing/<source>/<dataset>/` exists, normal scaffold commands change zero bytes inside it. A candidate version is a separate ownership unit under `versions/vN/`. Generated SLA/lifecycle/repair/release operation directories use the same rule.
 
+`DOMAIN OWNED FOREVER` means Framework scaffolding will not rewrite the file. It does **not** mean an already-applied production migration should be edited in place. After an environment records a migration as applied/baselined/remediated, that migration is immutable for that environment and future changes use later migration paths or implementation versions.
+
 Project initialization is also append-only. A Framework upgrade may introduce a new control migration, macro, example or runbook, but rerunning `init-project` never rewrites existing project files or the domain-owned `control_plane/deploy_manifest.txt`. `esf control-plan` reports explicit upgrade gaps.
 
 ## New dataset implementation layout
@@ -238,7 +289,7 @@ silver_processing/fleet_mssql/customer/
 └── deploy_manifest.fragment.txt
 ```
 
-Generated code is intended to be read and changed by domain engineers.
+Generated code is intended to be read and changed by domain engineers **before it is applied**. Once a path is applied in an environment, change production behavior with a new migration or implementation version rather than editing that path.
 
 ## Standard Silver patterns
 
@@ -253,7 +304,7 @@ SCD2 keeps complete history in one physical history table. Current state is `WHE
 ```text
 v1 ACTIVE
   -> scaffold-version v2
-  -> deploy candidate
+  -> deploy candidate migrations once
   -> full bootstrap / replay
   -> catch up
   -> shadow
@@ -263,7 +314,7 @@ v1 ACTIVE
   -> engineer reviews activate.sql / rollback.sql
 ```
 
-`release-sql` generates files only. It does not perform cutover or automatically approve a candidate.
+`release-sql` generates files only. It does not perform cutover or automatically approve a candidate. Release SQL is an explicit operation and is not automatically inserted into the normal apply-once deployment manifests.
 
 ## SLA, health and incidents
 
@@ -303,10 +354,10 @@ DQ/reconciliation can identify a failing layer or boundary, but the Framework do
 
 Silver processing and dbt remain in the same domain repo so one Git SHA identifies one domain release. dbt starts from trusted Silver. Mart/KPI/Semantic remain exploratory domain work; the Framework provides skeletons/examples rather than automatic business logic generation.
 
-The reusable deployment workflow executes committed control-plane SQL first, then committed Silver SQL, then dbt. Scaffolding never occurs during deployment.
+CONTROL and SILVER use apply-once/checksum-locked migration semantics. dbt deliberately does not: `dbt build` remains desired-state execution on every deployment after the migration runner completes. Scaffolding never occurs during deployment.
 
 ## Deliberately absent
 
-The toolkit does not contain a universal source-discovery engine, universal source-profiling engine, universal ingestion orchestrator, central generic SCD runtime engine, runtime metadata routing, metadata-to-runtime transformation SQL generation, deployment-time scaffolding, connector offset/checkpoint ownership, generic executable DQ-rule metadata, automatic reconciliation-rule inference, automatic business-key/SCD/SLA inference, one-click destructive decommission, or automatic business Mart/KPI/Semantic generation.
+The toolkit does not contain a universal source-discovery engine, universal source-profiling engine, universal ingestion orchestrator, central generic SCD runtime engine, runtime metadata routing, metadata-to-runtime transformation SQL generation, deployment-time scaffolding, connector offset/checkpoint ownership, generic executable DQ-rule metadata, automatic reconciliation-rule inference, automatic business-key/SCD/SLA inference, one-click destructive decommission, automatic migration retry after partial DDL failure, or automatic business Mart/KPI/Semantic generation.
 
 Live Snowflake/WIF acceptance remains a separate integration gate until a configured DEV Snowflake environment is available.

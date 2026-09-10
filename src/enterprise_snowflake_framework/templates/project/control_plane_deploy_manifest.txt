@@ -1,4 +1,5 @@
-# Domain-local control-plane SQL. Executed in committed order before Silver deployment.
+# Domain-local CONTROL migrations. Applied once per Snowflake environment by esf-migrate.
+# Once a path has been applied/baselined, never edit, remove or reorder it; append a later migration.
 control_plane/sql/001_objects.sql
 control_plane/sql/010_observability_views.sql
 control_plane/sql/020_refresh_health.sql

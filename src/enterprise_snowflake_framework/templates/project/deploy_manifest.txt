@@ -1,4 +1,5 @@
-# Committed Silver SQL deployment order.
+# Committed Silver migration order. Applied once per Snowflake environment by esf-migrate.
+# Once a path has been applied/baselined, never edit, remove or reorder it; add a later path.
 # Add explicit paths such as:
 # silver_processing/fleet_mssql/customer/001_objects.sql
 # silver_processing/fleet_mssql/customer/010_apply.sql
