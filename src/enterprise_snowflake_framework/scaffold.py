@@ -7,7 +7,13 @@ from typing import Any
 import yaml
 
 from .dynamic_table import render_dynamic_table_sql, render_dynamic_table_validation_sql
-from .execution_model import VersionExecution, default_execution_model, validate_execution_model
+from .execution_model import (
+    TaskExecution,
+    VersionExecution,
+    default_execution_model,
+    validate_execution_model,
+    validate_task_execution,
+)
 from .pipeline_sql import (
     build_names,
     render_apply_sql,
@@ -184,23 +190,63 @@ def _render_readme(
 
 
 def _execution_config(
-    *, pattern: str, execution_model: str | None, project_code: str,
-    target_lag: str | None, warehouse: str | None, refresh_mode: str | None,
+    *,
+    pattern: str,
+    execution_model: str | None,
+    project_code: str,
+    target_lag: str | None,
+    warehouse: str | None,
+    refresh_mode: str | None,
+    task_minimum_trigger_interval_seconds: int | None,
+    task_timeout_seconds: int | None,
+    task_suspend_after_failures: int | None,
+    task_error_integration: str | None,
 ) -> VersionExecution:
     model = execution_model or default_execution_model(pattern)
     validate_execution_model(pattern, model)
-    if model != "dynamic_table":
-        return VersionExecution(model)
-    lag = (target_lag or "5 minutes").strip()
-    wh = (warehouse or f"WH_{project_code}_TRANSFORM").strip().upper()
-    mode = (refresh_mode or "incremental").strip().lower()
-    if not lag:
-        raise ValueError("dynamic_table target_lag must not be empty")
-    if mode not in {"incremental", "full"}:
-        raise ValueError("dynamic_table refresh_mode must be incremental or full")
-    if not wh or not wh.replace("_", "A").isalnum() or not wh[0].isalpha():
-        raise ValueError("dynamic_table warehouse must be an unquoted Snowflake identifier")
-    return VersionExecution(model, target_lag=lag, warehouse=wh, refresh_mode=mode)
+    task_specific = (
+        task_minimum_trigger_interval_seconds,
+        task_timeout_seconds,
+        task_suspend_after_failures,
+        task_error_integration,
+    )
+
+    if model == "dynamic_table":
+        if any(value is not None for value in task_specific):
+            raise ValueError("task operational options require execution_model=stream_task")
+        lag = (target_lag or "5 minutes").strip()
+        wh = (warehouse or f"WH_{project_code}_TRANSFORM").strip().upper()
+        mode = (refresh_mode or "incremental").strip().lower()
+        if not lag:
+            raise ValueError("dynamic_table target_lag must not be empty")
+        if mode not in {"incremental", "full"}:
+            raise ValueError("dynamic_table refresh_mode must be incremental or full")
+        if not wh or not wh.replace("_", "A").isalnum() or not wh[0].isalpha():
+            raise ValueError("dynamic_table warehouse must be an unquoted Snowflake identifier")
+        return VersionExecution(model, target_lag=lag, warehouse=wh, refresh_mode=mode)
+
+    if model == "stream_task":
+        if target_lag is not None or refresh_mode is not None:
+            raise ValueError("dynamic_table target-lag/refresh-mode options require execution_model=dynamic_table")
+        task = validate_task_execution(
+            pattern,
+            TaskExecution(
+                warehouse=warehouse or f"WH_{project_code}_TRANSFORM",
+                minimum_trigger_interval_seconds=task_minimum_trigger_interval_seconds,
+                timeout_seconds=task_timeout_seconds,
+                suspend_after_failures=task_suspend_after_failures,
+                error_integration=task_error_integration,
+            ),
+        )
+        return VersionExecution(model, task=task)
+
+    if warehouse is not None or target_lag is not None or refresh_mode is not None:
+        raise ValueError(
+            "warehouse/target-lag/refresh-mode options are not generated for this execution model"
+        )
+    if any(value is not None for value in task_specific):
+        raise ValueError("task operational options require execution_model=stream_task")
+    return VersionExecution(model)
 
 
 def render_implementation_files(
@@ -209,6 +255,10 @@ def render_implementation_files(
     include_pipeline: bool, template_root: Path | None = None,
     execution_model: str | None = None, target_lag: str | None = None,
     warehouse: str | None = None, refresh_mode: str | None = None,
+    task_minimum_trigger_interval_seconds: int | None = None,
+    task_timeout_seconds: int | None = None,
+    task_suspend_after_failures: int | None = None,
+    task_error_integration: str | None = None,
 ) -> dict[str, str]:
     if pattern not in SUPPORTED_PATTERNS:
         raise ValueError(f"unsupported scaffold pattern: {pattern}")
@@ -217,6 +267,10 @@ def render_implementation_files(
     execution = _execution_config(
         pattern=pattern, execution_model=execution_model, project_code=project_code,
         target_lag=target_lag, warehouse=warehouse, refresh_mode=refresh_mode,
+        task_minimum_trigger_interval_seconds=task_minimum_trigger_interval_seconds,
+        task_timeout_seconds=task_timeout_seconds,
+        task_suspend_after_failures=task_suspend_after_failures,
+        task_error_integration=task_error_integration,
     )
     names = build_names(
         source_id=source_id,
@@ -259,7 +313,9 @@ def render_implementation_files(
             rendered["015_replay.sql"] = render_replay_sql(pattern, names, contract)
             rendered["020_validate.sql"] = render_validate_sql(pattern, names, contract)
         if execution.execution_model == "stream_task":
-            rendered["030_task.sql"] = render_task_sql(pattern, names, project_code)
+            rendered["030_task.sql"] = render_task_sql(
+                pattern, names, project_code, execution=execution
+            )
     if include_pipeline:
         rendered["pipeline.yml"] = _pipeline_yaml(pattern, source_id, dataset_id, raw_contract, contract)
     return rendered
@@ -278,6 +334,10 @@ def _prepare_dataset(
     raw_contract: str, owner: str, template_root: Path | None = None,
     execution_model: str | None = None, target_lag: str | None = None,
     warehouse: str | None = None, refresh_mode: str | None = None,
+    task_minimum_trigger_interval_seconds: int | None = None,
+    task_timeout_seconds: int | None = None,
+    task_suspend_after_failures: int | None = None,
+    task_error_integration: str | None = None,
 ) -> tuple[Path, dict[str, str]]:
     project_root = project_root.resolve()
     destination = project_root / "silver_processing" / source_id / dataset_id
@@ -289,6 +349,10 @@ def _prepare_dataset(
         candidate=False, include_pipeline=True, template_root=template_root,
         execution_model=execution_model, target_lag=target_lag,
         warehouse=warehouse, refresh_mode=refresh_mode,
+        task_minimum_trigger_interval_seconds=task_minimum_trigger_interval_seconds,
+        task_timeout_seconds=task_timeout_seconds,
+        task_suspend_after_failures=task_suspend_after_failures,
+        task_error_integration=task_error_integration,
     )
     return destination, rendered
 
@@ -303,6 +367,10 @@ def scaffold_preview(
     *, project_root: Path, source_id: str, dataset_id: str, template_root: Path | None = None,
     execution_model: str | None = None, target_lag: str | None = None,
     warehouse: str | None = None, refresh_mode: str | None = None,
+    task_minimum_trigger_interval_seconds: int | None = None,
+    task_timeout_seconds: int | None = None,
+    task_suspend_after_failures: int | None = None,
+    task_error_integration: str | None = None,
 ) -> ScaffoldPreviewResult:
     project_root = project_root.resolve()
     manifest, config = _dataset_config(project_root, source_id, dataset_id)
@@ -323,6 +391,10 @@ def scaffold_preview(
         include_pipeline=True, template_root=template_root,
         execution_model=execution_model, target_lag=target_lag,
         warehouse=warehouse, refresh_mode=refresh_mode,
+        task_minimum_trigger_interval_seconds=task_minimum_trigger_interval_seconds,
+        task_timeout_seconds=task_timeout_seconds,
+        task_suspend_after_failures=task_suspend_after_failures,
+        task_error_integration=task_error_integration,
     )
     return ScaffoldPreviewResult(
         source_id=source_id, dataset_id=dataset_id, pattern=pattern,
@@ -336,6 +408,10 @@ def scaffold_pipeline(
     template_root: Path | None = None, execution_model: str | None = None,
     target_lag: str | None = None, warehouse: str | None = None,
     refresh_mode: str | None = None,
+    task_minimum_trigger_interval_seconds: int | None = None,
+    task_timeout_seconds: int | None = None,
+    task_suspend_after_failures: int | None = None,
+    task_error_integration: str | None = None,
 ) -> ScaffoldDatasetResult:
     project_root = project_root.resolve()
     manifest, config = _dataset_config(project_root, source_id, dataset_id)
@@ -361,6 +437,10 @@ def scaffold_pipeline(
         owner=str(manifest["source"]["owner"]), template_root=template_root,
         execution_model=execution_model, target_lag=target_lag,
         warehouse=warehouse, refresh_mode=refresh_mode,
+        task_minimum_trigger_interval_seconds=task_minimum_trigger_interval_seconds,
+        task_timeout_seconds=task_timeout_seconds,
+        task_suspend_after_failures=task_suspend_after_failures,
+        task_error_integration=task_error_integration,
     )
     _write_prepared(destination, rendered)
     return ScaffoldDatasetResult(
