@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "enterprise-snowflake-data-project-framework"
-version = "0.11.0"
-description = "Append-only Snowflake domain pipeline scaffolding with versioning, SLA/incident control planes, run evidence, pattern-aware repair and enterprise health export guardrails"
+version = "0.12.0"
+description = "Append-only Snowflake domain pipeline scaffolding with safe manifest editing, versioning, SLA/incident control planes, run evidence, pattern-aware repair and enterprise health export guardrails"
 requires-python = ">=3.11"
 dependencies = [
   "jsonschema>=4.23,<5",
   "PyYAML>=6.0,<7",
+  "ruamel.yaml>=0.18,<0.19",
 ]
 
 [project.scripts]

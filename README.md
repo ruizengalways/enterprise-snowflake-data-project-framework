@@ -76,6 +76,7 @@ A fresh project contains committed control-plane migrations through:
 040_health_task.sql
 050_dataset_lifecycle_status.sql
 060_run_evidence_api.sql
+070_enterprise_health_export.sql
 ```
 
 The model includes `DATASET`, `DATASET_VERSION`, `SLA_POLICY`, `INGESTION_RUN`, `PIPELINE_RUN`, `DBT_RUN`, `DATASET_HEALTH`, `INCIDENT`, `REPAIR_RUN` and `VERSION_VALIDATION`.
@@ -90,7 +91,7 @@ dbt model result          -> CONTROL.DBT_RUN
 
 The ingestion ledger API records evidence only; it does not replace connector runtimes or own offsets/checkpoints. New dbt projects include an `on-run-end` macro. Per-dataset Gold health is opt-in with `config.meta.esf_dataset_id` so cross-dataset business marts are not falsely assigned to one source dataset.
 
-Cross-domain health is read-only aggregation of each domain's stable health view. A domain can be maintained or decommissioned independently.
+Cross-domain health uses `CONTROL.ENTERPRISE_HEALTH_EXPORT_V` and `CONTROL.DOMAIN_HEALTH_SUMMARY_V`. Enterprise monitoring explicitly UNIONs those read-only contracts; health calculation and writable state remain inside each domain.
 
 ## CLI
 
@@ -100,6 +101,13 @@ python -m pip install .
 esf init-project --project-root .
 esf control-plan --project-root .
 esf add-source fleet_mssql --project-root .
+
+# after reviewing contracts/raw/fleet_mssql/customer.yml
+esf add-dataset customer \
+  --source fleet_mssql \
+  --pattern scd2 \
+  --project-root .
+
 esf plan --source fleet_mssql --project-root .
 esf scaffold-preview customer --source fleet_mssql --project-root .
 esf scaffold scd2 customer --source fleet_mssql --project-root .
@@ -127,18 +135,20 @@ esf release-sql customer --source fleet_mssql --from-version v1 --to-version v2 
 esf validate --project-root .
 ```
 
+`add-dataset` performs one narrow write: it appends a missing dataset declaration to one source manifest. It defaults the RAW path to `contracts/raw/<source>/<dataset>.yml`, requires that reviewed contract to exist under the same source, preserves existing YAML comments/order through round-trip editing, does not modify existing dataset declarations and does not scaffold SQL.
+
 There is deliberately **no `--force`**.
 
 ## Ownership rule
 
 ```text
 NOT EXISTS
-    -> scaffold
+    -> create/append the requested ownership unit
 EXISTS
     -> DOMAIN OWNED FOREVER
 ```
 
-Once `silver_processing/<source>/<dataset>/` exists, normal scaffold commands change zero bytes inside it. A candidate version is a separate ownership unit under `versions/vN/`. Generated SLA/lifecycle/repair/release operation directories use the same rule.
+Once a source-manifest dataset declaration exists, `add-dataset` never changes it. Once `silver_processing/<source>/<dataset>/` exists, normal scaffold commands change zero bytes inside it. A candidate version is a separate ownership unit under `versions/vN/`. Generated SLA/lifecycle/repair/release operation directories use the same rule.
 
 Project initialization is also append-only. A Framework upgrade may introduce a new control migration, macro, example or runbook, but rerunning `init-project` never rewrites existing project files or the domain-owned `control_plane/deploy_manifest.txt`. `esf control-plan` reports explicit upgrade gaps.
 
