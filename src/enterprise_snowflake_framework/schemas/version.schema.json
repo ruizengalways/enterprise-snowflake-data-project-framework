@@ -17,6 +17,17 @@
         "initial_status": {"enum": ["active", "development"]},
         "activation": {"const": "explicit"},
         "execution_model": {"enum": ["stream_task", "dynamic_table", "batch_sql", "custom"]},
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["framework_version", "template_id", "template_revision", "template_digest"],
+          "properties": {
+            "framework_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"},
+            "template_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+            "template_revision": {"type": "integer", "minimum": 1},
+            "template_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          }
+        },
         "dynamic_table": {
           "type": "object",
           "additionalProperties": false,
