@@ -117,6 +117,9 @@ class DdlSafetyReleaseTests(unittest.TestCase):
         self.assertIn("FROM SILVER.FLEET_MSSQL_CUSTOMER_V2_HISTORY", activate)
         self.assertIn("COPY GRANTS", rollback)
         self.assertIn("FROM SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY", rollback)
+        self.assertIn("REGEXP_INSTR", activate)
+        self.assertIn("SILVER[.]FLEET_MSSQL_CUSTOMER_V2_HISTORY([^A-Z0-9_]|$)", activate)
+        self.assertNotIn("POSITION('SILVER.FLEET_MSSQL_CUSTOMER_V2_HISTORY'", activate)
 
     def test_release_requires_candidate_readiness_before_publication_and_retires_old_task_last(self) -> None:
         activate, _ = render_release_sql("scd2", self.v1, self.v2)
