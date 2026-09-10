@@ -24,6 +24,7 @@ from .pipeline_sql import (
 )
 from .plan import SourcePlan, build_source_plan, standard_dataset_files
 from .source_management import load_source_manifest
+from .template_provenance import attach_template_provenance
 
 SUPPORTED_PATTERNS = {"append", "full_refresh", "scd1", "scd2", "custom"}
 
@@ -231,7 +232,11 @@ def render_implementation_files(
             version=version, candidate=candidate, execution_model=execution.execution_model,
             template_root=template_root,
         ),
-        "version.yml": render_version_yaml(names, candidate=candidate, execution=execution),
+        "version.yml": attach_template_provenance(
+            render_version_yaml(names, candidate=candidate, execution=execution),
+            pattern=pattern,
+            execution_model=execution.execution_model,
+        ),
         "025_compare.sql": render_compare_sql(pattern, names, contract, candidate=candidate),
         "040_register.sql": render_register_sql(pattern, names, owner=owner, candidate=candidate),
         "050_publish.sql": render_publish_sql(pattern, names, candidate=candidate),
