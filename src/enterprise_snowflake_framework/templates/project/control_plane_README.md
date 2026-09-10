@@ -4,7 +4,7 @@ This directory belongs to this domain repository. It is not a shared writable pl
 
 The SQL under `control_plane/sql/` runs in the domain database context and creates or upgrades a local `CONTROL` schema.
 
-Committed paths in `deploy_manifest.txt` are ordered **migrations**, not a list to replay in full on every deployment. A fresh 0.19 project contains:
+Committed paths in `deploy_manifest.txt` are ordered **migrations**, not a list to replay in full on every deployment. A fresh Framework 0.24 project contains:
 
 ```text
 001_objects.sql
@@ -18,33 +18,66 @@ Committed paths in `deploy_manifest.txt` are ordered **migrations**, not a list 
 080_data_quality_reconciliation.sql
 090_dataset_execution_model.sql
 100_dynamic_table_observability.sql
+110_pipeline_execution_metrics.sql
+120_release_readiness.sql
+130_health_evaluation_cadence.sql
 ```
 
 The reusable deployment workflow uses `esf-migrate deploy` to create/use `CONTROL.DEPLOYMENT_HISTORY`, checksum the exact committed file bytes and apply only unseen CONTROL/SILVER paths. An already applied/baselined path with the same checksum is skipped. Changed checksum, removed/reordered history, duplicate manifest paths, or unresolved STARTED/FAILED attempts block deployment.
 
 `CONTROL.DEPLOYMENT_HISTORY` itself is created by the migration runner's tiny idempotent bootstrap because the ledger must exist before the first normal migration can be tracked.
 
-For an **existing populated domain adopting apply-once deployment**, do not let the first migration-runner deployment replay the historical manifests. The runner detects existing CONTROL/SILVER objects with empty history and blocks. Review the exact environment against the exact project Git SHA, then explicitly run `esf-migrate baseline ... --confirm-existing-state-reviewed`. Baseline records the existing committed paths and checksums without executing those files.
+For an **existing populated domain adopting apply-once deployment**, do not let the first migration-runner deployment replay historical manifests. Review the environment against the exact project Git SHA, then explicitly baseline the reviewed existing state. Baseline records committed paths/checksums without executing those files.
 
 After a migration has been recorded as SUCCEEDED/BASELINED/REMEDIATED in an environment, treat its path and bytes as immutable. Add a later migration for corrections. Do not edit the applied file in place.
 
-The control plane provides logical dataset registry/lifecycle state, implementation-version identity, execution-model metadata, SLA policy/cadence evaluation, ingestion/Silver/dbt evidence, normalized DQ/reconciliation evidence, health/incidents, version validation, repair audit, deployment history, dashboard views, and stable read-only enterprise health exports.
+The Control Plane provides logical dataset registry/lifecycle state, implementation-version identity, execution-model metadata, SLA policy evaluation, ingestion/Silver/dbt evidence, normalized DQ/reconciliation evidence, health/incidents, release/repair audit, deployment history, dashboard views, stable enterprise health exports and an audit contract for domain health-evaluator cadence changes.
 
-`060_run_evidence_api.sql` standardizes how source-specific ingestion records BEGIN/SUCCESS/FAILED evidence and extends `DBT_RUN` with invocation/resource identity. It does **not** orchestrate ingestion or own connector checkpoints.
+Key later migrations:
 
-`070_enterprise_health_export.sql` establishes `CONTROL.ENTERPRISE_HEALTH_EXPORT_V` and `CONTROL.DOMAIN_HEALTH_SUMMARY_V`.
+```text
+090_dataset_execution_model.sql
+  version execution model / primary runtime identity
 
-`080_data_quality_reconciliation.sql` adds `DQ_RESULT`, `RECONCILIATION_RESULT`, fail-closed record APIs, latest-status views, active-version quality semantics and an optional serverless quality-incident evaluator. Dataset checks remain committed dataset-local SQL; CONTROL never stores executable rule expressions.
+100_dynamic_table_observability.sql
+  native Dynamic Table refresh evidence without fake PIPELINE_RUN rows
 
-`090_dataset_execution_model.sql` separates logical semantics from implementation technology. `CONTROL.DATASET.PATTERN` remains the logical dataset semantic pattern. `CONTROL.DATASET_VERSION.EXECUTION_MODEL` and `PRIMARY_RUNTIME_OBJECT` identify how one implementation version executes. Existing pre-0.19 versions are backfilled from their already-recorded Task/apply objects; the migration does not infer a new technology.
+110_pipeline_execution_metrics.sql
+  canonical explicit-run rows/query-id metrics
 
-`100_dynamic_table_observability.sql` normalizes Snowflake-native Dynamic Table refresh evidence from `INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY`. It does not fabricate `CONTROL.PIPELINE_RUN` rows. The operational view chooses Stream/Task or Dynamic Table evidence according to the active implementation version.
+120_release_readiness.sql
+  release readiness, active/candidate invariants and RELEASE_RUN audit
+
+130_health_evaluation_cadence.sql
+  HEALTH_EVALUATION_CHANGE audit + latest recorded config view
+  does NOT alter the historical 040 Task schedule by itself
+```
 
 The health and quality tasks are created suspended. Resume them explicitly only after migration review.
 
+## Health evaluator cadence
+
+Released migration `040_health_task.sql` historically created `CONTROL.EVALUATE_DOMAIN_HEALTH_TASK` with a one-minute schedule. 040 remains immutable.
+
+Migration 130 adds the audit/read contract but performs no `ALTER TASK`. To change cadence, generate a reviewed operation:
+
+```bash
+esf health-cadence-sql health-every-5m \
+  --interval-seconds 300 \
+  --reason "Five-minute health evaluation is sufficient for this domain" \
+  --resume-after \
+  --project-root .
+```
+
+Use `--leave-suspended` instead when the intended final Task state is suspended. The Framework never guesses final state. The first contract supports interval schedules from 10 seconds through 8 days and deliberately does not expose cron.
+
+Generated preflight/postflight SQL uses `SHOW TASKS` to verify actual Snowflake state/schedule. `CONTROL.HEALTH_EVALUATION_CONFIG_V` is only the latest successfully recorded Framework operation and is not authoritative for out-of-band Task edits.
+
+Health evaluator cadence is domain operational policy. It is not a logical dataset SLA and is not stored in source manifests or implementation versions.
+
 ## Upgrade and deployment gate
 
-Rerunning `esf init-project` may create newly introduced missing control migration files, but it never edits this domain-owned `deploy_manifest.txt`.
+Rerunning `esf init-project` may create newly introduced missing Control migration files and runbooks, but it never edits this domain-owned `deploy_manifest.txt`.
 
 Use:
 
@@ -52,7 +85,7 @@ Use:
 esf control-plan --project-root .
 ```
 
-for the human-readable upgrade report. Review and explicitly append required migrations. For 0.19 adoption, append 090 and 100 after all previously applied manifest entries; do not reorder history merely to make numeric filenames look sorted around domain-owned migrations.
+for the human-readable upgrade report. Review and explicitly append required migrations after all previously adopted entries. Do not reorder historical entries merely to make numeric filenames appear sorted around domain-owned migrations.
 
 The reusable deployment workflow additionally runs:
 
@@ -60,11 +93,9 @@ The reusable deployment workflow additionally runs:
 esf-control-preflight --project-root .
 ```
 
-before Snowflake authentication. Deployment is blocked when a Framework-known migration is missing from the repo/manifest, duplicated, or out of Framework relative order. Domain-owned extra control migrations remain allowed; the normal manifest path/file checks still apply to them.
+before Snowflake authentication. Deployment is blocked when a Framework-known migration is missing from the repo/manifest, duplicated, or out of Framework relative order. Domain-owned extra Control migrations remain allowed; normal path/file checks still apply.
 
-After authentication, `esf-migrate deploy` enforces the environment-specific apply-once/checksum history. The preflight and migration runner are complementary: preflight checks the committed baseline before touching Snowflake; migration history decides whether each exact file is NEW, already applied, or blocked in that environment.
-
-The normal GitHub deployment path serializes one deployment per domain/environment with `cancel-in-progress: false` so two deployments do not race the same unseen migration.
+After authentication, `esf-migrate deploy` enforces environment-specific apply-once/checksum history. Preflight checks the committed baseline; migration history decides whether each exact file is NEW, already applied, or blocked in that environment.
 
 ## Execution-model boundary
 
@@ -75,12 +106,10 @@ PATTERN          = append / full_refresh / scd1 / scd2 / custom
 EXECUTION_MODEL  = stream_task / dynamic_table / batch_sql / custom
 ```
 
-A logical SCD1 dataset can therefore have v1 implemented with Stream+Task and v2 implemented with a Dynamic Table while retaining the same published semantic contract. `TARGET_LAG`, Dynamic Table warehouse and refresh mode are version execution configuration; they are not replacements for logical `CONTROL.SLA_POLICY`.
+A logical SCD1 dataset can have v1 implemented with Stream+Task and v2 implemented with a Dynamic Table while retaining the same published semantic contract. Version-level Task settings and Dynamic Table target lag/warehouse/refresh mode are implementation execution policy; they are not replacements for logical `CONTROL.SLA_POLICY`.
 
-See `docs/architecture/EXECUTION_MODELS.md`, `docs/architecture/DEPLOYMENT_CONTROL_PREFLIGHT.md` and `docs/architecture/APPLY_ONCE_MIGRATIONS.md` in the Framework repository.
+Enterprise monitoring may aggregate stable domain export views but must not write back into domain Control schemas. Cross-domain roles/grants belong in platform infrastructure.
 
-Enterprise monitoring may UNION the stable export views across domains, but must not write back into domain control schemas. Cross-domain roles/grants belong in platform infrastructure.
+The Control Plane records operational state and evidence. It does not dynamically route SCD patterns, generate transformation SQL at runtime, infer business DQ/reconciliation rules, decide source ingestion checkpoints, or turn dbt into a Bronze-to-Silver engine.
 
-The control plane records operational state and evidence. It does not dynamically route SCD patterns, generate transformation SQL at runtime, infer business DQ rules, decide reconciliation logic, or turn dbt into a Bronze-to-Silver engine.
-
-Repair SQL is intentionally reviewed and executed by engineers. The control plane records repair activity; it is not an autonomous repair engine.
+Repair, release, lifecycle and health-cadence SQL are intentionally reviewed and executed by engineers. The Control Plane records those operations; it is not an autonomous production operator.
