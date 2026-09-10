@@ -61,6 +61,10 @@ def scaffold_version(
     target_lag: str | None = None,
     warehouse: str | None = None,
     refresh_mode: str | None = None,
+    task_minimum_trigger_interval_seconds: int | None = None,
+    task_timeout_seconds: int | None = None,
+    task_suspend_after_failures: int | None = None,
+    task_error_integration: str | None = None,
     template_root: Path | None = None,
 ) -> ScaffoldVersionResult:
     project_root = project_root.resolve()
@@ -101,6 +105,10 @@ def scaffold_version(
         target_lag=target_lag,
         warehouse=warehouse,
         refresh_mode=refresh_mode,
+        task_minimum_trigger_interval_seconds=task_minimum_trigger_interval_seconds,
+        task_timeout_seconds=task_timeout_seconds,
+        task_suspend_after_failures=task_suspend_after_failures,
+        task_error_integration=task_error_integration,
     )
     destination.mkdir(parents=True, exist_ok=False)
     for filename, text in rendered.items():
