@@ -1,10 +1,25 @@
 # Current context
 
+## Released baseline
+
+Current stable Framework baseline after PR #25:
+
+```text
+version = 0.18.0
+main    = e578a1cde76a6dee2b5dfd41f07aa390d9b65c71
+```
+
+`Silver-first Toolkit CI` run #245 passed for that merge SHA. The first `Snowflake Framework Certification` workflow-run was created from that successful main CI and its credentialed job was skipped, which is the intended behavior while certification is not explicitly enabled/configured.
+
+The certification layer is implemented, but no real Snowflake artifact has yet reported `CERTIFIED` for this SHA. Do not describe 0.18.0 as Snowflake-certified until that happens.
+
+For new-conversation handoff, read `docs/NEXT_CHAT_HANDOFF.md` first.
+
 ## Framework position
 
 This repository is a project-creation and operations toolkit for readable Enterprise Snowflake domain repositories. It is not a universal data runtime.
 
-The framework owns safe project/source scaffolding, reviewed RAW/Silver contract validation, explicit pattern source-code generation, domain-local control-plane foundations and reusable CI/deployment workflows. Existing ownership units are never overwritten by scaffolding.
+The framework owns safe project/source scaffolding, reviewed RAW/Silver contract validation, explicit pattern source-code generation, domain-local control-plane foundations and reusable CI/deployment/certification workflows. Existing ownership units are never overwritten by scaffolding.
 
 ## Domain boundary
 
@@ -66,6 +81,8 @@ New standard dataset starters include explicit object/apply/replay/validation/ta
 
 A normal generated Task executes the dataset-local apply procedure and then its dataset-local validation procedure. `020_validate.sql` is committed, version-specific source code; it is not interpreted from runtime rule metadata.
 
+SCD1 current-state mutation is now ordering-aware when the reviewed RAW contract provides ordering evidence. A matched incoming event must be strictly newer than the stored row's ordering tuple before it may update or delete current state. Equal ordering is duplicate/no-op; an older late-arriving event cannot regress current state. This correctness guard was added in 0.18.0 after designing the real Snowflake certification fixtures.
+
 ## Apply-once deployment
 
 CONTROL and SILVER manifests are ordered apply-once migration manifests, not files to replay in full on every deployment.
@@ -106,6 +123,63 @@ Manifest position, not filename sorting, is the environment history contract. If
 dbt deliberately remains desired-state and runs on every deployment. Release/repair/lifecycle/SLA operation scripts remain explicit engineer-run operations outside the normal migration runner.
 
 See `docs/architecture/APPLY_ONCE_MIGRATIONS.md`.
+
+## DDL and release safety
+
+Apply-once migration history decides whether a committed file may execute; generated DDL still has its own safety contract.
+
+New version-owned persistent tables, streams, views, procedures and tasks are create-only/fail-closed. An unexpected pre-existing object name is an ownership conflict rather than an idempotency condition.
+
+Initial stable published views are create-only. Candidate deployment never changes stable consumer views. Explicit release/rollback is the only generated replacement boundary, using `CREATE OR REPLACE VIEW ... COPY GRANTS` so non-OWNERSHIP consumer privileges survive replacement.
+
+For stream-based candidates, release starts candidate processing before publication, replaces stable views, updates CONTROL lifecycle/version evidence, and suspends the old task last. Snowflake DDL can partially commit, so partial release remains an inspect/rollback scenario rather than being presented as one transaction.
+
+Procedure-scoped temporary working tables intentionally retain their invocation-local replacement semantics; this exception is not a persistent-object ownership loophole.
+
+## Trusted Snowflake certification
+
+0.18.0 includes a real Snowflake certification layer separate from ordinary PR CI.
+
+Credential-free PR CI continues to run package installation, released-migration immutability guards, reference validation, dbt parse, unit/contract tests and runtime-indirection guards. It does not execute PR-head SQL using the certification identity.
+
+The trusted certification path is:
+
+```text
+successful trusted main push CI
+  -> optional Snowflake Framework Certification
+  -> GitHub Environment: snowflake-certification
+  -> account-scoped GitHub OIDC / Snowflake WIF
+  -> dedicated CI_FRAMEWORK_CERT database
+  -> transient CONTROL / BRONZE / SILVER schemas
+  -> real generated SQL + assertions
+  -> guarded cleanup
+  -> snowflake-certification.json / .md
+```
+
+The runner hard-requires:
+
+```text
+SNOWFLAKE_USER      = SU_GITHUB_FRAMEWORK_CERT
+SNOWFLAKE_ROLE      = AR_FRAMEWORK_CERT
+SNOWFLAKE_WAREHOUSE = WH_FRAMEWORK_CERT_TRANSFORM
+SNOWFLAKE_DATABASE  = CI_FRAMEWORK_CERT
+```
+
+Published-grant certification uses a separate probe role:
+
+```text
+AR_FRAMEWORK_CERT_READER
+```
+
+The canonical real-Snowflake matrix covers APPEND, SCD1, SCD2 and FULL_REFRESH; initial/duplicate/update/delete/reinsert/late/out-of-order events; direct apply/replay/validate; manual `EXECUTE TASK`; triggered Stream->Task behavior; DQ evidence; apply-once first/repeat/checksum-drift/failure-block behavior; SCD2 v2 bootstrap plus post-stream candidate catch-up; version comparison; grant-preserving cutover; and rollback.
+
+Dynamic Table is deliberately `NOT_APPLICABLE` until a genuine Dynamic Table execution model exists.
+
+A revision is only Snowflake-certified when the real workflow produces an artifact with `status = CERTIFIED` for that exact Framework SHA. A normal green PR/main CI is not enough.
+
+The first workflow-run after merging 0.18.0 was created correctly from main CI but skipped before credentialed execution because live certification remains disabled/unconfigured. This demonstrates the intended opt-in boundary, not a certification pass.
+
+See `docs/architecture/SNOWFLAKE_CERTIFICATION.md`, `certification/README.md`, and `docs/NEXT_CHAT_HANDOFF.md`.
 
 ## Data quality and reconciliation
 
