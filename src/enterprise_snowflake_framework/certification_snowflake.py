@@ -13,6 +13,7 @@ from .pipeline_model import PipelineNames, build_names
 
 CERT_DATABASE = "CI_FRAMEWORK_CERT"
 CERT_ROLE = "AR_FRAMEWORK_CERT"
+CERT_READER_ROLE = "AR_FRAMEWORK_CERT_READER"
 CERT_USER = "SU_GITHUB_FRAMEWORK_CERT"
 CERT_WAREHOUSE = "WH_FRAMEWORK_CERT_TRANSFORM"
 TERMINAL_TASK_FAILURES = {"FAILED", "FAILED_AND_AUTO_SUSPENDED", "CANCELLED"}
@@ -152,7 +153,7 @@ class SnowflakeCertificationRuntime:
         self.framework_git_sha = framework_git_sha
         self.report = report
         self.project = project
-        self.cert_role = CERT_ROLE
+        self.cert_reader_role = CERT_READER_ROLE
 
     def fail(self, message: str) -> None:
         raise CertificationFailure(message)
@@ -271,7 +272,7 @@ class SnowflakeCertificationRuntime:
         self.assert_scalar(
             "SELECT COUNT(*) AS ACTUAL FROM INFORMATION_SCHEMA.OBJECT_PRIVILEGES "
             f"WHERE OBJECT_SCHEMA='SILVER' AND OBJECT_NAME='{view_name}' "
-            f"AND GRANTEE='{CERT_ROLE}' AND PRIVILEGE_TYPE='SELECT'",
+            f"AND GRANTEE='{CERT_READER_ROLE}' AND PRIVILEGE_TYPE='SELECT'",
             1,
         )
 
