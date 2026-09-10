@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .execution_model import load_version_execution, validate_execution_model
+from .execution_model import default_execution_model, load_version_execution, validate_execution_model
 from .pipeline_sql import build_names, render_release_sql
 from .scaffold import _load_raw_contract, render_implementation_files
 from .source_management import load_source_manifest
@@ -57,7 +57,7 @@ def scaffold_version(
     source_id: str,
     dataset_id: str,
     version: str,
-    execution_model: str = "stream_task",
+    execution_model: str | None = None,
     target_lag: str | None = None,
     warehouse: str | None = None,
     refresh_mode: str | None = None,
@@ -68,7 +68,8 @@ def scaffold_version(
     if number == 1:
         raise ValueError("v1 is the initial dataset implementation; scaffold candidate versions from v2 onward")
     manifest, _, pattern, raw_contract = _dataset_context(project_root, source_id, dataset_id)
-    validate_execution_model(pattern, execution_model)
+    model = execution_model or default_execution_model(pattern)
+    validate_execution_model(pattern, model)
     dataset_root = project_root / "silver_processing" / source_id / dataset_id
     pipeline_file = dataset_root / "pipeline.yml"
     if not pipeline_file.is_file():
@@ -96,7 +97,7 @@ def scaffold_version(
         candidate=True,
         include_pipeline=False,
         template_root=template_root,
-        execution_model=execution_model,
+        execution_model=model,
         target_lag=target_lag,
         warehouse=warehouse,
         refresh_mode=refresh_mode,
