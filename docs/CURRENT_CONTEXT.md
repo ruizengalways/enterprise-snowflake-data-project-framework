@@ -1,308 +1,420 @@
 # Current context
 
-## Released baseline
+This file describes the **current architecture**, not a chronological PR log. For a new conversation, read `docs/NEXT_CHAT_HANDOFF.md` first, then this file.
 
-Current stable Framework baseline after PR #25:
+## Stable baseline
 
 ```text
-version = 0.18.0
-main    = e578a1cde76a6dee2b5dfd41f07aa390d9b65c71
+repository = ruizengalways/enterprise-snowflake-data-project-framework
+version    = 0.19.0
+main       = a98a38bcb03b00a36c63cb0f2f8246d4356478d6
+PR #27     = merged
+PR CI #254 = SUCCESS
+main CI #255 = SUCCESS
+Snowflake Framework Certification run #11 = SKIPPED
 ```
 
-`Silver-first Toolkit CI` run #245 passed for that merge SHA. The first `Snowflake Framework Certification` workflow-run was created from that successful main CI and its credentialed job was skipped, which is the intended behavior while certification is not explicitly enabled/configured.
-
-The certification layer is implemented, but no real Snowflake artifact has yet reported `CERTIFIED` for this SHA. Do not describe 0.18.0 as Snowflake-certified until that happens.
-
-For new-conversation handoff, read `docs/NEXT_CHAT_HANDOFF.md` first.
+The certification workflow skip is intentional while the trusted Snowflake environment is disabled/unconfigured. No 0.19.0 SHA has yet produced a real `status = CERTIFIED` artifact. Green static CI is not Snowflake certification.
 
 ## Framework position
 
-This repository is a project-creation and operations toolkit for readable Enterprise Snowflake domain repositories. It is not a universal data runtime.
+This repository is a developer toolkit/bootstrapper for readable enterprise Snowflake domain repositories. It generates explicit source code, validates contracts and provides operational/deployment guardrails. It is **not** a universal runtime interpreter.
 
-The framework owns safe project/source scaffolding, reviewed RAW/Silver contract validation, explicit pattern source-code generation, domain-local control-plane foundations and reusable CI/deployment/certification workflows. Existing ownership units are never overwritten by scaffolding.
+The framework deliberately does not own:
 
-## Domain boundary
+- source profiling/discovery;
+- a universal ingestion engine;
+- runtime metadata-to-SQL transformation routing;
+- one central SCD engine;
+- business DQ rule inference;
+- autonomous production repair;
+- Bronze-to-Silver execution through dbt.
 
-One business domain is one domain repository and normally one domain Snowflake database per environment.
+Generated ownership units are created once, committed, reviewed and then domain-owned.
+
+## Domain and repository boundary
+
+One business domain normally owns one independent repository and one domain database per environment:
 
 ```text
 enterprise-snowflake-transport-analytics
-  -> DEV_TRANSPORT / UAT_TRANSPORT / PROD_TRANSPORT
+  -> DEV_TRANSPORT
+  -> UAT_TRANSPORT
+  -> PROD_TRANSPORT
 ```
 
-A domain may contain many sources. Source boundaries are preserved in repository paths and new Snowflake object names. Existing domain-owned pipelines are never renamed automatically.
+A domain may contain many source systems. Source boundaries remain explicit under `config/sources`, `contracts/raw`, `ingestion` and `silver_processing`.
+
+A typical domain database uses schemas such as:
+
+```text
+BRONZE
+SILVER
+GOLD_MARTS
+SEMANTIC
+CONTROL
+```
+
+Each domain owns its writable `CONTROL` schema. Do not replace this with one enterprise-wide writable `PLATFORM_CONTROL`.
 
 ## RAW contract authoring
 
-RAW contracts are reviewed engineering declarations. The Framework does not inspect source catalogs, profile sources, infer business keys, infer source timestamps/order, choose CDC/delete semantics or choose an SCD pattern.
+RAW contracts are reviewed engineering declarations. The Framework never infers business keys, source timestamps, ordering, CDC/delete semantics or SCD pattern from source metadata.
 
-Incomplete contract work lives outside the production contract boundary:
+Incomplete work belongs under:
 
 ```text
 contracts/drafts/<source>/<dataset>.yml
 ```
 
-`esf raw-contract-draft` creates one TODO-rich draft and never overwrites it. `esf raw-contract-finalize` refuses unresolved TODO values, applies the canonical RAW schema/semantic validation, and moves the exact reviewed bytes into:
+The intended workflow is:
 
 ```text
-contracts/raw/<source>/<dataset>.yml
+source evidence / engineering judgement
+  -> esf raw-contract-draft
+  -> engineer edits/reviews all semantics
+  -> esf raw-contract-finalize
+  -> esf add-dataset
+  -> esf plan
+  -> esf scaffold-preview
+  -> esf scaffold
 ```
 
-Drafts are not scanned by `esf validate`. Finalization never overwrites an existing formal contract and does not add the dataset declaration or scaffold Silver. The intended sequence is:
+`raw-contract-finalize` fails on unresolved TODOs, validates schema/semantics and never overwrites an existing formal RAW contract. It does not automatically declare or scaffold a dataset.
+
+Source profiling/discovery remains a separate future capability/repository rather than a dependency of this Framework.
+
+## Ingestion and Bronze
+
+`ingestion/` is source-specific. A domain may use Openflow, Snowpipe, Kafka, APIs, ADF/Talend or other tools. The Framework does not own mature connector checkpoints or pretend all ingestion technologies share one runtime.
+
+Bronze is the retained replay/audit evidence boundary.
+
+Control migration 060 provides optional ingestion evidence procedures that write `CONTROL.INGESTION_RUN`; they do not schedule ingestion.
+
+## Logical pattern vs execution model
+
+0.19 separates dataset semantics from implementation technology.
+
+Logical dataset pattern:
 
 ```text
-source evidence / judgement
-  -> raw-contract-draft
-  -> engineer edits/reviews
-  -> raw-contract-finalize
-  -> add-dataset
-  -> plan / scaffold-preview / scaffold
+append
+full_refresh
+scd1
+scd2
+custom
 ```
 
-Source profiling/discovery remains a future optional separate repository, not a dependency of this Framework.
-
-## Ingestion
-
-`ingestion/` is a source-specific integration boundary. Projects may use Openflow, Snowpipe, Kafka connectors, external ETL/orchestrators or project-specific API ingestion. The Framework does not implement a universal ingestion runtime or own mature connector checkpoints.
-
-Control migration 060 provides optional BEGIN/COMPLETE/FAIL ingestion run-evidence procedures. They write `CONTROL.INGESTION_RUN`; they do not schedule or route ingestion.
-
-## Bronze -> Silver
-
-Preferred Snowflake-native shape:
+Version-specific execution model:
 
 ```text
-BRONZE -> Stream/readiness -> Task -> dataset-local SQL procedure -> SILVER
+stream_task
+dynamic_table
+batch_sql
+custom
 ```
 
-Standard patterns are append, full_refresh, scd1, scd2 and custom. Pattern algorithms are reused at scaffold time to generate explicit dataset-local source code. There is no central metadata-driven SCD runtime.
+`pattern` remains in the source manifest and `CONTROL.DATASET`. `execution_model` belongs to `version.yml` and `CONTROL.DATASET_VERSION`.
 
-New standard dataset starters include explicit object/apply/replay/validation/task/register/publish SQL plus policy and deploy-manifest fragments. Generated apply procedures write RUNNING/SUCCESS/FAILED evidence to `CONTROL.PIPELINE_RUN`.
+`procedure` is not an execution model. It is an implementation artifact used by some models.
 
-A normal generated Task executes the dataset-local apply procedure and then its dataset-local validation procedure. `020_validate.sql` is committed, version-specific source code; it is not interpreted from runtime rule metadata.
+The supported 0.19 compatibility matrix is intentionally narrow:
 
-SCD1 current-state mutation is now ordering-aware when the reviewed RAW contract provides ordering evidence. A matched incoming event must be strictly newer than the stored row's ordering tuple before it may update or delete current state. Equal ordering is duplicate/no-op; an older late-arriving event cannot regress current state. This correctness guard was added in 0.18.0 after designing the real Snowflake certification fixtures.
+```text
+append       + stream_task   = supported
+full_refresh + stream_task   = supported
+full_refresh + dynamic_table = supported
+full_refresh + batch_sql     = supported
+scd1         + stream_task   = supported
+scd1         + dynamic_table = supported
+scd2         + stream_task   = supported
+custom       + custom        = supported / domain-owned
+```
+
+All other combinations fail closed. In particular, `scd2 + dynamic_table` and `append + dynamic_table` are not supported merely because Snowflake can express related SQL constructs.
+
+See `docs/architecture/EXECUTION_MODELS.md`.
+
+## Stream + Task Silver
+
+The historical/default standard implementation remains Snowflake-native Stream/readiness + Task + explicit dataset-local SQL/procedure.
+
+Typical ownership unit:
+
+```text
+version.yml
+001_objects.sql
+010_apply.sql
+015_replay.sql
+020_validate.sql
+025_compare.sql
+030_task.sql
+040_register.sql
+050_publish.sql
+060_policy.sql
+deploy_manifest.fragment.txt
+```
+
+Apply procedures write `CONTROL.PIPELINE_RUN`. A generated Task runs apply and then dataset-local validation. New persistent version-owned objects are create-only/fail-closed.
+
+SCD1 mutation uses reviewed ordering evidence. An incoming matched event must be strictly newer than the current row ordering tuple before update/delete. Equal tuples are duplicate/no-op; a late older event cannot regress current state.
+
+SCD2 retains deterministic event evidence/history per implementation version and supports affected-key history rebuild for late-arriving evidence.
+
+## Dynamic Table Silver
+
+Dynamic Table is a first-class execution model for compatible declarative patterns.
+
+A Dynamic Table version intentionally does **not** generate fake Stream, Task, apply or replay procedure files:
+
+```text
+README.md
+version.yml
+001_dynamic_table.sql
+020_validate.sql
+025_compare.sql
+040_register.sql
+050_publish.sql
+060_policy.sql
+deploy_manifest.fragment.txt
+```
+
+For `scd1 + dynamic_table`, current state is defined declaratively from Bronze using business key plus reviewed ordering columns and tombstone semantics.
+
+For `full_refresh + dynamic_table`, the Dynamic Table represents the current Bronze snapshot.
+
+Dynamic Table execution policy is version-local:
+
+```text
+target_lag
+warehouse
+refresh_mode = incremental | full
+```
+
+`TARGET_LAG` is a Snowflake staleness target, not a business SLA. `CONTROL.SLA_POLICY` remains separate. The Framework deliberately does not default Dynamic Tables to refresh mode `AUTO`.
+
+Dataset-local Dynamic Table validation writes `CONTROL.DQ_RESULT` directly; the Framework does not fabricate a validation procedure/Task or fake `CONTROL.PIPELINE_RUN` entry.
+
+## Batch SQL and custom
+
+`batch_sql` is initially limited to `full_refresh`. It owns explicit batch transformation SQL/procedure artifacts but no Framework-owned scheduler. External scheduling remains explicit.
+
+`custom` means the domain owns the execution behavior. The Framework provides minimal ownership/registration/publication authoring boundaries and does not invent a generic custom runtime.
+
+## Version metadata and Control Plane
+
+Fresh 0.19 projects include Control migrations:
+
+```text
+001_objects.sql
+010_observability_views.sql
+020_refresh_health.sql
+030_sla_incident_lifecycle.sql
+040_health_task.sql
+050_dataset_lifecycle_status.sql
+060_run_evidence_api.sql
+070_enterprise_health_export.sql
+080_data_quality_reconciliation.sql
+090_dataset_execution_model.sql
+100_dynamic_table_observability.sql
+```
+
+Released numbered migrations are immutable. Future fixes append later migrations; do not edit 001..100 in place.
+
+Migration 090 adds version execution metadata including:
+
+```text
+EXECUTION_MODEL
+PRIMARY_RUNTIME_OBJECT
+```
+
+Legacy standard versions without an `execution_model` field remain readable as `stream_task`. Migration 090 backfills existing control rows from already-recorded implementation artifacts rather than choosing a new technology.
+
+Migration 100 normalizes native Dynamic Table evidence through `INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY`. It creates `CONTROL.DYNAMIC_TABLE_REFRESH_STATUS_V` and upgrades `CONTROL.DATASET_OBSERVABILITY_V` so active Silver health reads the correct evidence source for the active execution model.
+
+Dynamic Table refreshes are not represented by fake `CONTROL.PIPELINE_RUN` rows.
 
 ## Apply-once deployment
 
-CONTROL and SILVER manifests are ordered apply-once migration manifests, not files to replay in full on every deployment.
+CONTROL and SILVER manifests are apply-once migration histories, not lists to replay every deployment.
 
-The reusable deployment flow is:
+Normal deployment:
 
 ```text
-immutable project Git SHA + immutable Framework SHA
+immutable project Git SHA + Framework SHA
   -> esf validate
   -> esf-control-preflight
-  -> manifest path/file safety checks
+  -> path/file safety checks
   -> GitHub OIDC / Snowflake WIF
   -> bootstrap CONTROL.DEPLOYMENT_HISTORY
   -> esf-migrate deploy
-       CONTROL new files -> APPLY
-       CONTROL recorded identical files -> SKIP
-       SILVER new files -> APPLY
-       SILVER recorded identical files -> SKIP
-       drift / partial state -> BLOCK
+       NEW                        -> APPLY
+       recorded + same checksum   -> SKIP
+       checksum/path/order drift  -> BLOCK
+       STARTED/FAILED unresolved  -> BLOCK
   -> dbt debug
   -> dbt build
 ```
 
-`CONTROL.DEPLOYMENT_HISTORY` is environment-local and records migration path, exact-file SHA-256, manifest position, project/framework Git SHAs, attempt status/timestamps, errors, GitHub run ID and operator reason when applicable.
+Deployment history stores file path, exact SHA-256 checksum, manifest position, project/framework Git SHA, attempt timestamps/status/error details and GitHub run identity.
 
-Once an environment records a migration as `SUCCEEDED`, `BASELINED` or `REMEDIATED`, its path, checksum and manifest position are immutable there. Removing/reordering an applied path or changing its bytes blocks deployment. Future changes append a new migration path or use a new dataset implementation version.
+Once `SUCCEEDED`, `BASELINED` or `REMEDIATED`, an environment's migration path/checksum/position is immutable.
 
-`STARTED` and `FAILED` block rather than retry automatically. Snowflake DDL can partially commit before a later statement in the same file fails; an engineer must inspect/repair partial state and may then explicitly record remediation with `esf-migrate resolve`. Resolve does not re-execute the failed file.
+Existing populated domains with empty deployment history must use explicit reviewed baseline adoption. The Framework must never replay all historical SQL merely because the ledger is new.
 
-Existing populated domains cannot be safely inferred as fresh. If CONTROL/SILVER objects exist while deployment history is empty, normal migration deployment blocks. The engineer must check out/review the exact already-deployed project revision and use `esf-migrate baseline --confirm-existing-state-reviewed`; baseline records those manifest files/checksums as `BASELINED` and executes zero historical migration files. Fresh empty domains must use normal first deployment, not baseline.
+Manifest order is environment history. Later Framework migrations are appended without reordering already-applied domain migrations.
 
-The normal GitHub path serializes deployments per domain/environment with `cancel-in-progress: false`.
+Deployments are serialized per domain/environment. dbt remains desired-state and may run every deployment.
 
-Framework-released numbered control migration templates are immutable after release. A later correction adds a later numbered migration instead of editing 001..080 in place. Framework CI enforces this on pull requests.
+## DDL and publication safety
 
-Manifest position, not filename sorting, is the environment history contract. If a domain has already appended its own migration and a later Framework migration is introduced, append the new Framework migration without reordering already-recorded entries even when the resulting numeric filenames are not visually sorted.
+Apply-once history controls whether a file executes; the DDL itself also fails closed.
 
-dbt deliberately remains desired-state and runs on every deployment. Release/repair/lifecycle/SLA operation scripts remain explicit engineer-run operations outside the normal migration runner.
+New version-owned persistent tables, streams, views, procedures, tasks and Dynamic Tables are create-only. Unexpected pre-existing names are ownership conflicts.
 
-See `docs/architecture/APPLY_ONCE_MIGRATIONS.md`.
+Initial stable published views are create-only. Candidate deployment never changes stable consumer objects.
 
-## DDL and release safety
-
-Apply-once migration history decides whether a committed file may execute; generated DDL still has its own safety contract.
-
-New version-owned persistent tables, streams, views, procedures and tasks are create-only/fail-closed. An unexpected pre-existing object name is an ownership conflict rather than an idempotency condition.
-
-Initial stable published views are create-only. Candidate deployment never changes stable consumer views. Explicit release/rollback is the only generated replacement boundary, using `CREATE OR REPLACE VIEW ... COPY GRANTS` so non-OWNERSHIP consumer privileges survive replacement.
-
-For stream-based candidates, release starts candidate processing before publication, replaces stable views, updates CONTROL lifecycle/version evidence, and suspends the old task last. Snowflake DDL can partially commit, so partial release remains an inspect/rollback scenario rather than being presented as one transaction.
-
-Procedure-scoped temporary working tables intentionally retain their invocation-local replacement semantics; this exception is not a persistent-object ownership loophole.
-
-## Trusted Snowflake certification
-
-0.18.0 includes a real Snowflake certification layer separate from ordinary PR CI.
-
-Credential-free PR CI continues to run package installation, released-migration immutability guards, reference validation, dbt parse, unit/contract tests and runtime-indirection guards. It does not execute PR-head SQL using the certification identity.
-
-The trusted certification path is:
+Explicit release/rollback is the generated replacement boundary and uses:
 
 ```text
-successful trusted main push CI
-  -> optional Snowflake Framework Certification
-  -> GitHub Environment: snowflake-certification
-  -> account-scoped GitHub OIDC / Snowflake WIF
-  -> dedicated CI_FRAMEWORK_CERT database
-  -> transient CONTROL / BRONZE / SILVER schemas
-  -> real generated SQL + assertions
-  -> guarded cleanup
-  -> snowflake-certification.json / .md
+CREATE OR REPLACE VIEW ... COPY GRANTS
 ```
 
-The runner hard-requires:
+so explicit non-OWNERSHIP consumer grants survive stable-view switching.
+
+Old processing is retired last so an earlier publication/control failure does not begin a cutover by stopping the currently active implementation.
+
+Snowflake DDL is not treated as one rollbackable transaction; partial release requires state inspection and reviewed rollback/correction.
+
+## Versioning, release and repair
+
+Candidate implementations live under:
 
 ```text
-SNOWFLAKE_USER      = SU_GITHUB_FRAMEWORK_CERT
-SNOWFLAKE_ROLE      = AR_FRAMEWORK_CERT
-SNOWFLAKE_WAREHOUSE = WH_FRAMEWORK_CERT_TRANSFORM
-SNOWFLAKE_DATABASE  = CI_FRAMEWORK_CERT
+silver_processing/<source>/<dataset>/versions/vN/
 ```
 
-Published-grant certification uses a separate probe role:
+Creating a candidate changes zero bytes in the active implementation.
+
+Typical flow:
 
 ```text
-AR_FRAMEWORK_CERT_READER
+scaffold candidate
+  -> append migrations
+  -> deploy once
+  -> bootstrap/replay/refresh as appropriate
+  -> catch up
+  -> DQ
+  -> active-vs-candidate comparison
+  -> explicit release SQL
+  -> cutover
 ```
 
-The canonical real-Snowflake matrix covers APPEND, SCD1, SCD2 and FULL_REFRESH; initial/duplicate/update/delete/reinsert/late/out-of-order events; direct apply/replay/validate; manual `EXECUTE TASK`; triggered Stream->Task behavior; DQ evidence; apply-once first/repeat/checksum-drift/failure-block behavior; SCD2 v2 bootstrap plus post-stream candidate catch-up; version comparison; grant-preserving cutover; and rollback.
-
-Dynamic Table is deliberately `NOT_APPLICABLE` until a genuine Dynamic Table execution model exists.
-
-A revision is only Snowflake-certified when the real workflow produces an artifact with `status = CERTIFIED` for that exact Framework SHA. A normal green PR/main CI is not enough.
-
-The first workflow-run after merging 0.18.0 was created correctly from main CI but skipped before credentialed execution because live certification remains disabled/unconfigured. This demonstrates the intended opt-in boundary, not a certification pass.
-
-See `docs/architecture/SNOWFLAKE_CERTIFICATION.md`, `certification/README.md`, and `docs/NEXT_CHAT_HANDOFF.md`.
-
-## Data quality and reconciliation
-
-Control migration 080 adds normalized evidence rather than a generic DQ engine:
+Release understands both old and new execution models. A supported example is:
 
 ```text
-dataset-local validation SQL -> CONTROL.DQ_RESULT
-reconciliation code           -> CONTROL.RECONCILIATION_RESULT
+SCD1 v1 stream_task -> SCD1 v2 dynamic_table
 ```
 
-The Framework-generated structural DQ starters are intentionally narrow:
+A Dynamic Table candidate is refreshed before publication. A Stream+Task candidate may be activated according to its readiness model. Stable consumer views switch with `COPY GRANTS`; the old runtime is retired last.
+
+Lifecycle is execution-model aware:
 
 ```text
-append       -> duplicate idempotency key + NULL business key
-scd1         -> duplicate business key + NULL business key
-full_refresh -> duplicate business key + NULL business key
-scd2         -> multiple active rows + NULL business key + overlapping periods
-custom       -> domain-authored
+stream_task   -> ALTER TASK SUSPEND / RESUME
+dynamic_table -> ALTER DYNAMIC TABLE SUSPEND / RESUME
+batch_sql     -> external scheduler coordination
+custom        -> domain-authored
 ```
 
-Business DQ remains domain-owned after scaffold. Reconciliation is not inferred; the domain chooses the correct comparison for Source -> Bronze, Bronze -> Silver or other boundaries and records a normalized result through `CONTROL.RECORD_RECONCILIATION_RESULT` when useful.
+Repair starts from the nearest known-good layer. Dynamic Table repair uses explicit refresh/rebuild semantics rather than calling nonexistent replay procedures and rejects bounded replay where the execution model cannot represent it safely.
 
-Evidence status is fail-closed. Intended severity is `ERROR` or `WARN`; unknown severity is normalized to `ERROR`. Intended status is `PASS` or `FAIL`; unknown status is stored as `INVALID` and evaluated as a failure rather than silently treated as success.
+`repair-sql`, `release-sql`, `lifecycle-sql` and `sla-sql` generate reviewable operations and never execute production changes automatically.
 
-DQ evidence is version-specific. Only the active implementation version contributes to production DQ health; candidate evidence is retained for shadow/release review. For reconciliation, version-specific active evidence is preferred over unversioned evidence for the same stage; versionless evidence remains appropriate for non-versioned boundaries such as Source -> Bronze.
+## DQ and reconciliation
 
-`ERROR` failures contribute red health and automatic `DQ_FAILURE` / `RECONCILIATION_FAILURE` incidents. `WARN` failures contribute yellow health without creating an automatic failure incident. The quality-incident evaluator has its own serverless task, created suspended, so adopting migration 080 cannot replace or silently suspend an existing domain-health task.
+Control migration 080 provides normalized evidence rather than a generic DQ runtime:
 
-## Domain-local control plane
+```text
+dataset-local validation -> CONTROL.DQ_RESULT
+domain reconciliation   -> CONTROL.RECONCILIATION_RESULT
+```
 
-Each domain owns its own `CONTROL` schema. Do not create one shared writable `PLATFORM_CONTROL` database across all domains.
+Framework-generated structural checks remain narrow. Business DQ and reconciliation logic are domain-owned.
 
-The control plane includes dataset/version identity, lifecycle, SLA policy, ingestion/pipeline/dbt run evidence, DQ/reconciliation evidence, health, incidents, version validation, repair audit and deployment history.
+Evidence is version-specific. Only the active implementation affects production DQ health; candidate evidence is retained for release review.
 
-Logical dataset lifecycle is explicit: `ACTIVE`, `PAUSED`, `DECOMMISSIONED`.
+Unknown result status/severity fails closed. ERROR failures contribute red health and DQ/reconciliation incidents; WARN failures contribute yellow health without automatic failure incidents.
 
-Control-plane upgrades remain explicit. Rerunning `init-project` creates newly introduced missing files without overwriting existing files or the domain-owned deploy manifest. `esf control-plan` reports repo/manifest gaps. `esf-control-preflight` fails deployment when the selected Framework baseline is incomplete. Fresh projects include migrations through `080_data_quality_reconciliation.sql`.
+## SLA and health
 
-## Enterprise health export
+SLA is logical-dataset policy, independent of source manifest and execution model. Supported cadence concepts include continuous, interval and scheduled-deadline evaluation across Source->Bronze, Bronze->Silver, Silver->Gold and end-to-end freshness.
 
-Each domain evaluates its own health and exposes a stable read-only contract through:
+Stream+Task Silver health uses `CONTROL.PIPELINE_RUN` evidence. Dynamic Table Silver health uses native refresh history normalized by migration 100.
+
+Health and quality evaluator Tasks are serverless and created suspended. Adoption never silently resumes them.
+
+## Enterprise monitoring
+
+Each domain evaluates its own writable health state and exports stable read-only views:
 
 ```text
 CONTROL.ENTERPRISE_HEALTH_EXPORT_V
 CONTROL.DOMAIN_HEALTH_SUMMARY_V
 ```
 
-After migration 080 the export includes lifecycle, stage status, DQ status, reconciliation status, SLA, latency, freshness, incident and overall-health fields. Enterprise monitoring does not rerun or reinterpret domain DQ/SLA logic.
+Enterprise monitoring may UNION these exports but must not write back into domain CONTROL schemas or reinterpret domain SLA/DQ rules. Cross-domain grants belong in platform infrastructure.
 
-A separate enterprise monitoring repository/database explicitly UNIONs participating domain views. It owns cross-domain presentation only; it does not write to domain `CONTROL` schemas. Cross-domain grants remain platform-infrastructure concerns.
+## dbt / Gold / Semantic
 
-Because migration 080 extends the stable export columns, participating domains should be upgraded coherently before a central `SELECT * UNION ALL` contract is changed. During staggered upgrades, explicitly select the shared column set in the central view.
+dbt starts at trusted Silver. It is not a Silver execution engine.
 
-Removing a domain means removing that domain's read branch/grant after the retention decision. Other domain control planes remain unchanged.
+New dbt projects include optional run-evidence integration. Only models explicitly mapped with `config.meta.esf_dataset_id` participate in one logical dataset's Gold health; cross-dataset marts should normally remain unmapped.
 
-## Run evidence
+Gold marts, KPI semantics and business semantic views remain domain work and are not inferred by the Framework.
 
-```text
-source-specific ingestion -> CONTROL.INGESTION_RUN
-Silver apply procedure    -> CONTROL.PIPELINE_RUN
-Silver validation         -> CONTROL.DQ_RESULT
-dbt model result          -> CONTROL.DBT_RUN
-reconciliation code       -> CONTROL.RECONCILIATION_RESULT
-```
+## Trusted real-Snowflake certification
 
-New dbt projects include an `on-run-end` macro. A model only participates in one logical dataset's Gold health when it explicitly declares `config.meta.esf_dataset_id`; cross-dataset business marts should normally remain unmapped. Existing domain repos are not silently opted into dbt logging because `init-project` never rewrites an existing `dbt_project.yml`.
+The trusted certification layer is separate from untrusted PR CI.
 
-## SCD2 default
+Credential-free PR/main CI validates package installation, released-migration immutability, reference project structure, dbt parse, unit/contracts and runtime-indirection guardrails.
 
-The default SCD2 model is one physical history table per implementation version. Current state is `IS_ACTIVE = TRUE`, exposed through a version-local current view and stable published current view. A separate physical current table is optional when performance evidence justifies it.
-
-## Versioning and blue/green
-
-Candidate versions live under `silver_processing/<source>/<dataset>/versions/vN/` and own independent physical objects, Stream/Task where appropriate, apply/replay procedures and validation SQL. Creating v2 changes zero bytes in v1.
+Full certification requires the dedicated Snowflake boundary:
 
 ```text
-scaffold -> deploy candidate migrations once -> bootstrap/replay -> catch up -> shadow -> validate -> compare -> release SQL -> explicit cutover
+CI_FRAMEWORK_CERT
+AR_FRAMEWORK_CERT
+AR_FRAMEWORK_CERT_READER
+SU_GITHUB_FRAMEWORK_CERT
+WH_FRAMEWORK_CERT_TRANSFORM
 ```
 
-Candidate DQ evidence remains version-specific and must be reviewed together with version comparison evidence before release. `release-sql` generates activate/rollback SQL for review; `esf` never executes it and does not automatically approve a candidate.
+Canonical live scenarios cover APPEND, SCD1, SCD2 and FULL_REFRESH behavior, Stream/Task execution, DQ, migration first/repeat/drift/failure behavior, candidate bootstrap/catch-up, grant-preserving cutover and rollback.
 
-An important consequence of apply-once deployment is that a later redeploy no longer re-executes v1 `050_publish.sql`, so an explicit v2 cutover is not silently undone by replaying old published-view DDL.
-
-## SLA and observability
-
-SLA belongs to the logical dataset, not to the source manifest or implementation version. Supported cadence types are `CONTINUOUS`, `INTERVAL` and `SCHEDULED_DEADLINE`. Latency and freshness are separate metrics. Stage policy can cover Source -> Bronze, Bronze -> Silver, Silver -> Gold and end-to-end freshness.
-
-`CONTROL.EVALUATE_DOMAIN_HEALTH()` refreshes base timing/SLA health and automatic ingestion/pipeline/dbt/SLA incidents. `CONTROL.EVALUATE_QUALITY_INCIDENTS()` separately manages DQ/reconciliation failure incidents. Sustained conditions reuse an incident key; recovery resolves it. Both serverless tasks are created suspended.
-
-## Dataset lifecycle
-
-`esf lifecycle-sql` generates explicit pause/resume/soft-decommission SQL and never executes it. Pause/resume require an explicit implementation version. Soft decommission stops known implementation tasks, marks the logical dataset `DECOMMISSIONED`, retires versions and preserves Bronze/Silver/published/audit evidence. Physical cleanup is a separate approved retention/governance change.
-
-## Repair
-
-Repair starts from the latest known-good layer:
-
-- Gold wrong / Silver correct -> rebuild dbt descendants.
-- Silver wrong / Bronze correct -> build a candidate and replay Bronze.
-- Bronze wrong -> repair ingestion first, then replay downstream.
-
-Replay, backfill and reset remain distinct.
-
-`repair-plan` is read-only. `repair-sql` generates candidate-only reviewable scripts for the four standard patterns:
+0.19 additionally includes a cross-execution-model certification scenario:
 
 ```text
-append       -> idempotent Bronze event replay
-scd1         -> ordered current-state rebuild/merge
-scd2         -> affected-key history rebuild
-full_refresh -> complete current Bronze snapshot rebuild
-custom       -> domain-authored
+SCD1 v1 stream_task
+  -> v2 dynamic_table
+  -> native refresh
+  -> late/out-of-order equivalence
+  -> post-candidate Bronze catch-up
+  -> native refresh-history evidence
+  -> DQ + comparison
+  -> COPY GRANTS cutover
+  -> execution-model-aware health
+  -> rollback
 ```
 
-A new empty candidate should normally use a full bootstrap with no range bounds. Bounded replay assumes a correct candidate baseline outside the requested range. Full-refresh rejects time ranges. All standard replay procedures write `CONTROL.REPAIR_RUN` evidence. Active production is not changed until a separately generated and reviewed release.
+A Framework revision is Snowflake-certified only when the trusted workflow emits `snowflake-certification.json` with `status = CERTIFIED` for that exact SHA.
 
-DQ/reconciliation evidence helps identify whether Bronze, Silver or a boundary is wrong; it does not automatically execute repair.
+For current 0.19.0 main, certification run #11 was safely skipped because live certification is not enabled/configured. Therefore 0.19.0 is **not yet Snowflake-certified**.
 
-## Gold / KPI / Semantic
+See `docs/architecture/SNOWFLAKE_CERTIFICATION.md` and `certification/README.md`.
 
-These remain exploratory domain work. The Framework keeps skeletons/examples but does not auto-generate business marts, KPI SQL or semantic business models.
+## Immediate next priority
 
-## Architectural guardrails
+The highest-value next step is to configure/verify the dedicated Snowflake certification environment and run the real certification against exact main. Treat live Snowflake failures as product evidence rather than weakening canonical fixtures.
 
-Continue to reject source-profiling/discovery inside this repo, deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, connector offset/checkpoint ownership, generic executable DQ rules in CONTROL, naive universal reconciliation, shared writable cross-domain control planes, hidden active-version switching, automatic production repair execution, automatic failed-migration retry, automatic migration baseline inference, automatic business-key/SCD/SLA inference, destructive one-click decommission and automatic business Mart/KPI/Semantic generation.
-
-The control plane may centralize operational health/version/incident/lifecycle/run-evidence/quality-evidence/deployment-history logic inside a domain, but must not hide dataset transformation or business-quality behavior.
+Only after live certification should the Framework add another large abstraction. A likely next feature is a release-readiness preflight that consumes existing candidate DQ, version-comparison and runtime evidence while leaving approval/cutover explicit and engineer-controlled.
