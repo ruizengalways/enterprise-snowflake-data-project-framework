@@ -110,7 +110,7 @@ class TaskOperationalConfigTests(unittest.TestCase):
         self.assertEqual(900, task["timeout_seconds"])
         self.assertEqual(3, task["suspend_after_failures"])
         self.assertEqual("TASK_ERROR_NOTIFICATIONS", task["error_integration"])
-        self.assertEqual(3, version["version"]["provenance"]["template_revision"])
+        self.assertEqual(4, version["version"]["provenance"]["template_revision"])
 
         sql = (result.destination / "030_task.sql").read_text(encoding="utf-8")
         self.assertIn("WAREHOUSE = WH_TRANSPORT_HEAVY", sql)

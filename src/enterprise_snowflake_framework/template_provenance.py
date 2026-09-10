@@ -11,7 +11,7 @@ import yaml
 
 # Keep this release identity explicit and deterministic. A contract test keeps it in sync
 # with pyproject.toml. Generated files must not depend on wall-clock time or Git state.
-FRAMEWORK_VERSION = "0.26.0"
+FRAMEWORK_VERSION = "0.27.0"
 
 VERSION_RE = re.compile(r"^v([1-9][0-9]*)$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -174,6 +174,8 @@ _CUSTOM_ARTIFACTS = (
 # Revision 2 of Stream/Task templates declared version-local Task operational policy.
 # Revision 3 is limited to append/scd2 Stream+Task templates: incoming apply/replay batches now
 # fail closed on conflicting payloads for one idempotency identity and collapse exact duplicates.
+# Revision 4 is SCD2-only: replay of retained Bronze rows preserves synthetic Stream action INSERT;
+# tombstone delete meaning remains in the reviewed source operation column.
 _TEMPLATE_HISTORY: dict[str, dict[int, TemplateSpec]] = {
     "append_stream_task": {
         1: TemplateSpec("append_stream_task", 1, _STREAM_TASK_ARTIFACTS),
@@ -201,6 +203,7 @@ _TEMPLATE_HISTORY: dict[str, dict[int, TemplateSpec]] = {
         1: TemplateSpec("scd2_stream_task", 1, _STREAM_TASK_ARTIFACTS),
         2: TemplateSpec("scd2_stream_task", 2, _STREAM_TASK_ARTIFACTS),
         3: TemplateSpec("scd2_stream_task", 3, _STREAM_TASK_ARTIFACTS),
+        4: TemplateSpec("scd2_stream_task", 4, _STREAM_TASK_ARTIFACTS),
     },
     "custom_custom": {1: TemplateSpec("custom_custom", 1, _CUSTOM_ARTIFACTS)},
 }
