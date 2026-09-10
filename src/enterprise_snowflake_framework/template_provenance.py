@@ -11,7 +11,7 @@ import yaml
 
 # Keep this release identity explicit and deterministic. A contract test keeps it in sync
 # with pyproject.toml. Generated files must not depend on wall-clock time or Git state.
-FRAMEWORK_VERSION = "0.23.0"
+FRAMEWORK_VERSION = "0.24.0"
 
 VERSION_RE = re.compile(r"^v([1-9][0-9]*)$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
