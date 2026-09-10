@@ -10,8 +10,11 @@ class ProjectDeployContractTests(unittest.TestCase):
 
     def test_silver_sql_is_committed_not_generated(self) -> None:
         self.assertIn("silver_processing/deploy_manifest.txt", self.workflow)
-        self.assertIn("Deploy committed Silver SQL in manifest order", self.workflow)
-        self.assertIn("-f \"project/${path}\"", self.workflow)
+        self.assertIn("esf-migrate deploy", self.workflow)
+        self.assertIn("Apply committed CONTROL and SILVER migrations once", self.workflow)
+        self.assertNotIn("Deploy committed Silver SQL in manifest order", self.workflow)
+        self.assertNotIn('echo "Applying ${path}"', self.workflow)
+        self.assertNotIn("esf scaffold", self.workflow)
         self.assertNotIn("render_dbt_vars", self.workflow)
         self.assertNotIn("render_dbt_context", self.workflow)
         self.assertNotIn("packages.yml", self.workflow)
