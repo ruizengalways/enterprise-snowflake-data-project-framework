@@ -168,6 +168,8 @@ def render_deploy_fragment(names: PipelineNames, *, candidate: bool) -> str:
         filenames = ["001_dynamic_table.sql", "020_validate.sql", "040_register.sql"]
     elif names.execution_model == "batch_sql":
         filenames = ["001_objects.sql", "010_apply.sql", "015_replay.sql", "020_validate.sql", "040_register.sql"]
+    elif names.execution_model == "custom":
+        filenames = ["001_objects.sql", "040_register.sql"]
     else:
         filenames = ["001_objects.sql", "010_apply.sql", "015_replay.sql", "020_validate.sql", "030_task.sql", "040_register.sql"]
     if not candidate:
