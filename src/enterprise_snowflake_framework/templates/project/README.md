@@ -15,7 +15,7 @@ missing ownership unit -> create
 existing ownership unit -> never overwrite
 ```
 
-This applies to source-manifest dataset declarations, dataset roots, candidate `versions/vN/` directories and generated SLA/lifecycle/repair/release files.
+This applies to RAW contract drafts/formal contracts, source-manifest dataset declarations, dataset roots, candidate `versions/vN/` directories and generated SLA/lifecycle/repair/release files.
 
 This project owns a domain-local control plane under `control_plane/`. The committed SQL creates this domain's `CONTROL` schema, operational ledgers, version/SLA state, health evaluation, incident lifecycle and dashboard-ready views. It is not a shared global runtime database.
 
@@ -31,15 +31,34 @@ See `ingestion/RUN_EVIDENCE.md` and `dbt/README.md`. Ingestion remains source-sp
 
 Enterprise monitoring reads the domain's stable `CONTROL.ENTERPRISE_HEALTH_EXPORT_V` / `CONTROL.DOMAIN_HEALTH_SUMMARY_V`; see `docs/ENTERPRISE_HEALTH_EXPORT.md`. Cross-domain monitoring remains read-only.
 
-For a reviewed RAW contract, declare the dataset first and inspect the plan before scaffolding:
+## RAW contract -> dataset workflow
+
+Source profiling/discovery is outside this Framework. If a formal RAW contract is not ready yet, create an isolated draft that is ignored by production validation:
 
 ```bash
-esf control-plan --project-root .
 esf add-source <source_id> --project-root .
+
+esf raw-contract-draft <dataset> \
+  --source <source_id> \
+  --project-root .
+
+# Edit contracts/drafts/<source_id>/<dataset>.yml and resolve every TODO.
+
+esf raw-contract-finalize <dataset> \
+  --source <source_id> \
+  --project-root .
+```
+
+`raw-contract-finalize` validates the reviewed draft and moves the exact bytes into `contracts/raw/<source>/<dataset>.yml`. It never overwrites an existing formal contract and does not declare or scaffold the dataset.
+
+Then register the reviewed contract and inspect the plan before scaffolding:
+
+```bash
 esf add-dataset <dataset> \
   --source <source_id> \
   --pattern scd2 \
   --project-root .
+
 esf plan --source <source_id> --project-root .
 esf scaffold-preview <dataset> --source <source_id> --project-root .
 esf scaffold-all --source <source_id> --project-root .
@@ -47,6 +66,8 @@ esf validate --project-root .
 ```
 
 `add-dataset` only appends a missing `datasets.<dataset>` declaration to the source manifest. It defaults `raw_contract` to `contracts/raw/<source>/<dataset>.yml`, requires that contract to exist under the same source, preserves existing YAML comments/order through round-trip editing, never edits an existing dataset declaration and never scaffolds SQL.
+
+Run `esf control-plan --project-root .` when adopting Framework control-plane upgrades; existing deploy manifests are never rewritten automatically.
 
 Define an SLA only after the domain agrees the operational expectation:
 
