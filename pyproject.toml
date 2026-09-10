@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "enterprise-snowflake-data-project-framework"
-version = "0.14.0"
-description = "Append-only Snowflake domain pipeline scaffolding with reviewed RAW contracts, versioned DQ/reconciliation evidence, SLA/incident control planes, repair and enterprise health guardrails"
+version = "0.15.0"
+description = "Append-only Snowflake domain pipeline scaffolding with reviewed RAW contracts, versioned quality evidence, fail-closed deployment preflight, SLA/repair and enterprise health guardrails"
 requires-python = ">=3.11"
 dependencies = [
   "jsonschema>=4.23,<5",
@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 esf = "enterprise_snowflake_framework.cli:main"
+esf-control-preflight = "enterprise_snowflake_framework.deployment_preflight:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
