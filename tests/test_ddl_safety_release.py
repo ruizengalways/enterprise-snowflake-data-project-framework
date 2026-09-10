@@ -118,17 +118,19 @@ class DdlSafetyReleaseTests(unittest.TestCase):
         self.assertIn("COPY GRANTS", rollback)
         self.assertIn("FROM SILVER.FLEET_MSSQL_CUSTOMER_V1_HISTORY", rollback)
 
-    def test_release_starts_candidate_before_publication_and_retires_old_task_last(self) -> None:
+    def test_release_requires_candidate_readiness_before_publication_and_retires_old_task_last(self) -> None:
         activate, _ = render_release_sql("scd2", self.v1, self.v2)
-        resume_new = activate.index("ALTER TASK SILVER.FLEET_MSSQL_CUSTOMER_V2_TASK RESUME")
+        preflight = activate.index("FROM CONTROL.RELEASE_READINESS_V")
         publish = activate.index("CREATE OR REPLACE VIEW SILVER.FLEET_MSSQL_CUSTOMER_HISTORY COPY GRANTS")
         control = activate.index("ACTIVE_VERSION = 'v2'")
         suspend_old = activate.index("ALTER TASK SILVER.FLEET_MSSQL_CUSTOMER_V1_TASK SUSPEND")
 
-        self.assertLess(resume_new, publish)
+        self.assertLess(preflight, publish)
         self.assertLess(publish, control)
         self.assertLess(control, suspend_old)
         self.assertEqual(suspend_old, activate.rfind("ALTER TASK"))
+        self.assertNotIn("ALTER TASK SILVER.FLEET_MSSQL_CUSTOMER_V2_TASK RESUME", activate)
+        self.assertIn("must already be caught up", activate)
 
     def test_new_dataset_migration_does_not_reexecute_existing_task_migration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
