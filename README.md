@@ -93,16 +93,29 @@ same identity + identical payload   -> collapse to one output event/row
 already persisted identity           -> target/event-ledger guard remains
 ```
 
-Identity comparison is NULL-safe, so nullable idempotency components cannot bypass the cross-batch guard. Conflicting payload comparison uses a canonical JSON row signature rather than choosing an arbitrary winner. SCD2 event identity remains `RAW idempotency_key + ESF_STREAM_ACTION`; delete/insert semantics are unchanged. Full replay checks conflicts before destructive candidate clearing.
+Identity comparison is NULL-safe, so nullable idempotency components cannot bypass the cross-batch guard. Conflicting payload comparison uses a canonical JSON row signature rather than choosing an arbitrary winner. Full replay checks conflicts before destructive candidate clearing.
 
-Only the affected template contracts advance:
+The 0.26 template revisions are:
 
 ```text
-append_stream_task  revision 2 -> 3
-scd2_stream_task    revision 2 -> 3
+append_stream_task  revision 3
+scd2_stream_task    revision 3
 ```
 
 SCD1, full-refresh, Dynamic Table and custom revisions remain unchanged. See `docs/architecture/INPUT_IDEMPOTENCY.md`.
+
+## SCD2 retained-evidence replay identity — 0.27
+
+The same Transport adoption exposed a second, narrower defect. For a tombstone contract, the 0.26 replay renderer converted a retained Bronze row with `source_operation = D` into synthetic `ESF_STREAM_ACTION = DELETE`. That mixed two different meanings:
+
+```text
+source delete semantics      = reviewed RAW operation column / tombstone value
+Snowflake Stream action      = physical change made to the Bronze table
+```
+
+A retained full-change tombstone is still a Bronze evidence row. Framework 0.27 therefore replays retained Bronze rows with synthetic `ESF_STREAM_ACTION = INSERT`; tombstone meaning remains exclusively in the reviewed operation column. The generated history logic still treats `source_operation = D` as a delete boundary and emits no active tombstone row.
+
+Only `scd2_stream_task` advances from revision 3 to **revision 4**. `append_stream_task` stays at revision 3. This keeps provenance specific to the artifact contract that actually changed.
 
 ## Version-local Stream/Task policy — 0.23
 
@@ -122,7 +135,7 @@ Optional settings are omitted when unspecified. The Framework does not expose ar
 
 Each domain owns writable `CONTROL`. Enterprise monitoring consumes stable read-only exports rather than writing into one shared enterprise runtime-control database.
 
-A fresh 0.26 project contains these ordered Framework migrations:
+A fresh 0.27 project contains these ordered Framework migrations:
 
 ```text
 001_objects.sql
@@ -142,7 +155,7 @@ A fresh 0.26 project contains these ordered Framework migrations:
 140_dynamic_table_observability_enrichment.sql
 ```
 
-Framework 0.26 adds no Control migration. Released numbered migrations are immutable; never edit `001..140` in place after release.
+Framework 0.27 adds no Control migration. Released numbered migrations are immutable; never edit `001..140` in place after release.
 
 Rerunning `esf init-project` materializes newly introduced missing Framework files but never rewrites an existing domain-owned `control_plane/deploy_manifest.txt`. Use `esf control-plan --project-root .` and explicitly append adopted migrations without reordering recorded history.
 
@@ -226,14 +239,14 @@ candidate deploy
 
 ## Template provenance and upgrade planning
 
-New implementation versions carry deterministic provenance. For a newly scaffolded 0.26 SCD2 Stream/Task version:
+New implementation versions carry deterministic provenance. For a newly scaffolded 0.27 SCD2 Stream/Task version:
 
 ```yaml
 version:
   provenance:
-    framework_version: 0.26.0
+    framework_version: 0.27.0
     template_id: scd2_stream_task
-    template_revision: 3
+    template_revision: 4
     template_digest: sha256:...
 ```
 
@@ -243,7 +256,7 @@ Run:
 esf upgrade-plan --project-root .
 ```
 
-It reports `CURRENT`, `UPDATE_AVAILABLE`, `ADVISORY`, `UNKNOWN` or `UNVERIFIED` without editing domain-owned files. A 0.25 SCD2/append rev2 implementation therefore reports `UPDATE_AVAILABLE`; it is not silently rewritten. Pre-provenance versions remain `UNKNOWN`; the Framework never reverse-engineers old SQL to guess template history. See `docs/architecture/TEMPLATE_PROVENANCE.md`.
+It reports `CURRENT`, `UPDATE_AVAILABLE`, `ADVISORY`, `UNKNOWN` or `UNVERIFIED` without editing domain-owned files. A 0.26 SCD2 rev3 implementation reports `UPDATE_AVAILABLE`; a 0.26 append rev3 implementation remains `CURRENT` because its artifact contract did not change in 0.27. Pre-provenance versions remain `UNKNOWN`; the Framework never reverse-engineers old SQL to guess template history. See `docs/architecture/TEMPLATE_PROVENANCE.md`.
 
 ## Data quality, reconciliation and SLA
 
@@ -289,7 +302,7 @@ A Framework SHA is **Snowflake-certified only** when the trusted certification w
 
 ## Roadmap state
 
-The planned architecture roadmap through Framework 0.25 is complete. Framework 0.26 is an evidence-driven correctness release discovered during real Transport-domain adoption. Further framework work should likewise come from live Snowflake certification/integration evidence, a real domain adoption defect or a concrete operational requirement—not speculative abstraction.
+The planned architecture roadmap through Framework 0.25 is complete. Framework 0.26 and 0.27 are evidence-driven correctness releases discovered while adopting the toolkit in the Transport domain. Further framework work should likewise come from live Snowflake certification/integration evidence, a real domain adoption defect or a concrete operational requirement—not speculative abstraction.
 
 ## Deliberately absent
 
