@@ -163,9 +163,11 @@ class ExecutionModelDynamicTableTests(unittest.TestCase):
                 to_version="v2",
             )
             activate = (release.destination / "activate.sql").read_text(encoding="utf-8")
-            self.assertIn("ALTER DYNAMIC TABLE SILVER.FLEET_MSSQL_CUSTOMER_V2 REFRESH", activate)
+            self.assertIn("candidate Dynamic Table must already be refreshed/caught up before preflight", activate)
+            self.assertNotIn("ALTER DYNAMIC TABLE SILVER.FLEET_MSSQL_CUSTOMER_V2 REFRESH", activate)
             self.assertIn("CREATE OR REPLACE VIEW SILVER.FLEET_MSSQL_CUSTOMER COPY GRANTS", activate)
             self.assertIn("ALTER TASK SILVER.FLEET_MSSQL_CUSTOMER_V1_TASK SUSPEND", activate)
+            self.assertIn("FROM CONTROL.RELEASE_READINESS_V", activate)
             self.assertLess(activate.index("CREATE OR REPLACE VIEW"), activate.index("ALTER TASK SILVER.FLEET_MSSQL_CUSTOMER_V1_TASK SUSPEND"))
 
             lifecycle = generate_lifecycle_scripts(

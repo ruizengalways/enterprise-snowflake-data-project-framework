@@ -145,6 +145,68 @@ def _require_version_implementation(
         raise FileNotFoundError(f"version implementation not found: {required}")
 
 
+def _release_preflight_sql(dataset_key: str, from_version: str, to_version: str) -> str:
+    return f"""-- Read-only release preview. activate.sql repeats these checks as hard guards immediately before cutover.
+-- READY may proceed after engineer review. REVIEW_REQUIRED needs explicit acceptance when generating activate.sql.
+-- BLOCKED must not be bypassed.
+SELECT
+    DATASET_ID,
+    ACTIVE_VERSION,
+    CANDIDATE_VERSION,
+    INVARIANT_STATUS,
+    INVARIANT_REASON,
+    CANDIDATE_VERSION_STATUS,
+    CANDIDATE_EXECUTION_MODEL,
+    RUNTIME_STATUS,
+    RUNTIME_EVIDENCE_AT,
+    CANDIDATE_DATA_MAX_AT,
+    DQ_STATUS,
+    DQ_CHECKED_AT,
+    COMPARISON_STATUS,
+    COMPARISON_VALIDATED_AT,
+    COMPARISON_OLDEST_VALIDATED_AT,
+    READINESS_STATUS,
+    READINESS_REASON
+FROM CONTROL.RELEASE_READINESS_V
+WHERE DATASET_ID = '{dataset_key}';
+
+-- The requested edge must match the environment state; the generated activate.sql fails closed otherwise.
+SELECT
+    DATASET_ID,
+    ACTIVE_VERSION,
+    CANDIDATE_VERSION,
+    IFF(ACTIVE_VERSION = '{from_version}' AND CANDIDATE_VERSION = '{to_version}', 'PASS', 'BLOCKED') AS REQUESTED_EDGE_STATUS
+FROM CONTROL.DATASET
+WHERE DATASET_ID = '{dataset_key}';
+"""
+
+
+def _release_postflight_sql(dataset_key: str) -> str:
+    return f"""-- Read-only release/rollback verification aid. The operation scripts also run hard postflight checks.
+SELECT *
+FROM CONTROL.RELEASE_RUN_LATEST_V
+WHERE DATASET_ID = '{dataset_key}';
+
+SELECT *
+FROM CONTROL.DATASET_VERSION_INVARIANT_V
+WHERE DATASET_ID = '{dataset_key}';
+
+SELECT
+    DATASET_ID,
+    VERSION,
+    STATUS,
+    EXECUTION_MODEL,
+    PRIMARY_RUNTIME_OBJECT,
+    DEPLOYED_AT,
+    ACTIVATED_AT,
+    RETIRED_AT,
+    UPDATED_AT
+FROM CONTROL.DATASET_VERSION
+WHERE DATASET_ID = '{dataset_key}'
+ORDER BY VERSION;
+"""
+
+
 def generate_release_scripts(
     *,
     project_root: Path,
@@ -153,12 +215,16 @@ def generate_release_scripts(
     from_version: str,
     to_version: str,
     output_root: Path | None = None,
+    allow_review_required: bool = False,
+    operator_reason: str | None = None,
 ) -> ReleaseScriptsResult:
     project_root = project_root.resolve()
     validate_version(from_version)
     validate_version(to_version)
     if from_version == to_version:
         raise ValueError("from_version and to_version must differ")
+    if allow_review_required and not operator_reason:
+        raise ValueError("operator_reason is required when allowing REVIEW_REQUIRED release evidence")
     _require_version_implementation(project_root, source_id, dataset_id, from_version)
     _require_version_implementation(project_root, source_id, dataset_id, to_version)
     _, _, pattern, raw_contract = _dataset_context(project_root, source_id, dataset_id)
@@ -185,7 +251,13 @@ def generate_release_scripts(
         version=to_version,
         execution_model=to_execution.execution_model,
     )
-    activate, rollback = render_release_sql(pattern, names_from, names_to)
+    activate, rollback = render_release_sql(
+        pattern,
+        names_from,
+        names_to,
+        allow_review_required=allow_review_required,
+        operator_reason=operator_reason,
+    )
     root = (output_root or project_root / "operations" / "release").resolve()
     destination = root / source_id / dataset_id / f"{from_version}_to_{to_version}"
     if destination.exists():
@@ -199,21 +271,38 @@ def generate_release_scripts(
             files=(),
         )
     destination.mkdir(parents=True, exist_ok=False)
+    acceptance = (
+        "This bundle was generated with explicit acceptance of REVIEW_REQUIRED evidence. "
+        f"Recorded reason: `{operator_reason}`\n\n"
+        if allow_review_required
+        else "`REVIEW_REQUIRED` blocks activation by default. Regenerate with `--allow-review-required --reason ...` only after reviewing the evidence.\n\n"
+    )
     readme = (
         f"# Release {source_id}.{dataset_id}: {from_version} -> {to_version}\n\n"
         "These scripts are generated for review and explicit execution. They are never run by `esf`.\n\n"
+        "Control migration `120_release_readiness.sql` must be applied before this bundle is executed.\n\n"
         f"From execution model: `{from_execution.execution_model}`  \n"
         f"To execution model: `{to_execution.execution_model}`\n\n"
+        "`CONTROL.RELEASE_READINESS_V` consumes existing candidate runtime, DQ, comparison and version-pointer evidence. "
+        "It does not approve a candidate or infer business correctness.\n\n"
+        + acceptance
+        + "Recommended flow:\n\n"
         "1. Deploy the candidate version.\n"
         "2. Bootstrap/replay or refresh historical Bronze evidence as appropriate for its execution model.\n"
-        "3. Run candidate validation and active-vs-candidate comparison.\n"
-        "4. Review and run `activate.sql`.\n"
-        "5. Keep `rollback.sql` for the approved rollback window.\n"
+        "3. Run candidate validation and active-vs-candidate comparison after the latest candidate runtime update.\n"
+        "4. Run `preflight.sql` and review `READY`, `REVIEW_REQUIRED` or `BLOCKED`.\n"
+        "5. Review and run `activate.sql`; it repeats preflight as a hard guard and writes `CONTROL.RELEASE_RUN`.\n"
+        "6. Run `postflight.sql` and keep `rollback.sql` for the approved rollback window.\n\n"
+        "Before rollback, explicitly catch up the retired target implementation and rerun its DQ. "
+        "The rollback script then requires target runtime SUCCESS, fresh target DQ PASS, catch-up evidence not behind the current active version, and no newer candidate. "
+        "There is no generated rollback bypass.\n"
     )
     files = {
         "README.md": readme,
+        "preflight.sql": _release_preflight_sql(names_to.dataset_key, from_version, to_version),
         "activate.sql": activate,
         "rollback.sql": rollback,
+        "postflight.sql": _release_postflight_sql(names_to.dataset_key),
     }
     paths: list[Path] = []
     for filename, text in files.items():

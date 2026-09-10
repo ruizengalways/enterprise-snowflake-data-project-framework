@@ -184,12 +184,22 @@ def _build_parser() -> argparse.ArgumentParser:
     repair_sql.add_argument("--project-root", type=Path, default=Path.cwd())
 
     release_sql = subparsers.add_parser(
-        "release-sql", help="Generate explicit activate/rollback SQL; never execute it."
+        "release-sql", help="Generate guarded activate/rollback SQL with release preflight and postflight; never execute it."
     )
     release_sql.add_argument("dataset_id")
     release_sql.add_argument("--source", required=True, dest="source_id")
     release_sql.add_argument("--from-version", required=True)
     release_sql.add_argument("--to-version", required=True)
+    release_sql.add_argument(
+        "--allow-review-required",
+        action="store_true",
+        help="Accept REVIEW_REQUIRED evidence after human review. BLOCKED evidence can never be bypassed.",
+    )
+    release_sql.add_argument(
+        "--reason",
+        dest="operator_reason",
+        help="Operator review reason. Required with --allow-review-required and embedded in RELEASE_RUN audit SQL.",
+    )
     release_sql.add_argument("--output-root", type=Path)
     release_sql.add_argument("--project-root", type=Path, default=Path.cwd())
 
@@ -489,6 +499,8 @@ def main() -> None:
                 from_version=args.from_version,
                 to_version=args.to_version,
                 output_root=args.output_root,
+                allow_review_required=args.allow_review_required,
+                operator_reason=args.operator_reason,
             )
             print(
                 f"Generated release scripts: {result.destination}"

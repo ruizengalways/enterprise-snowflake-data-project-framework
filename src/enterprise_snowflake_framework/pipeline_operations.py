@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .execution_model import VersionExecution, render_version_yaml as _render_version_yaml
 from .pipeline_model import PipelineNames
+from .release_operations import render_release_sql
 
 
 def render_task_sql(pattern: str, names: PipelineNames, project_code: str) -> str:
@@ -39,6 +40,89 @@ END;
 """
 
 
+def _candidate_registration_guard(names: PipelineNames) -> str:
+    return f"""-- Candidate registration is fail-closed. A second candidate must not silently
+-- replace DATASET.CANDIDATE_VERSION, and a retired/active version must not be re-registered.
+EXECUTE IMMEDIATE $$
+DECLARE
+    V_DATASET_COUNT NUMBER DEFAULT 0;
+    V_ACTIVE_VERSION VARCHAR;
+    V_CANDIDATE_VERSION VARCHAR;
+    V_ACTIVE_STATUS_COUNT NUMBER DEFAULT 0;
+    V_ACTIVE_POINTER_MATCH_COUNT NUMBER DEFAULT 0;
+    V_INCOMING_STATUS VARCHAR;
+    V_OTHER_DEPLOYED_COUNT NUMBER DEFAULT 0;
+    E_NO_ACTIVE EXCEPTION (-20030, 'Candidate registration requires one existing active dataset.');
+    E_ACTIVE_INVARIANT EXCEPTION (-20031, 'Candidate registration requires exactly one ACTIVE version matching ACTIVE_VERSION.');
+    E_SAME_AS_ACTIVE EXCEPTION (-20032, 'Candidate version must differ from ACTIVE_VERSION.');
+    E_CANDIDATE_CONFLICT EXCEPTION (-20033, 'Another candidate is already registered for this dataset.');
+    E_VERSION_STATE_CONFLICT EXCEPTION (-20034, 'Candidate version is already ACTIVE or RETIRED.');
+BEGIN
+    V_DATASET_COUNT := (
+        SELECT COUNT(*)
+        FROM CONTROL.DATASET
+        WHERE DATASET_ID = '{names.dataset_key}'
+          AND ACTIVE_VERSION IS NOT NULL
+    );
+    IF (V_DATASET_COUNT <> 1) THEN
+        RAISE E_NO_ACTIVE;
+    END IF;
+
+    SELECT ACTIVE_VERSION, CANDIDATE_VERSION
+      INTO :V_ACTIVE_VERSION, :V_CANDIDATE_VERSION
+    FROM CONTROL.DATASET
+    WHERE DATASET_ID = '{names.dataset_key}';
+
+    V_ACTIVE_STATUS_COUNT := (
+        SELECT COUNT(*)
+        FROM CONTROL.DATASET_VERSION
+        WHERE DATASET_ID = '{names.dataset_key}'
+          AND UPPER(COALESCE(STATUS, '')) = 'ACTIVE'
+    );
+    V_ACTIVE_POINTER_MATCH_COUNT := (
+        SELECT COUNT(*)
+        FROM CONTROL.DATASET_VERSION
+        WHERE DATASET_ID = '{names.dataset_key}'
+          AND VERSION = :V_ACTIVE_VERSION
+          AND UPPER(COALESCE(STATUS, '')) = 'ACTIVE'
+    );
+    IF (V_ACTIVE_STATUS_COUNT <> 1 OR V_ACTIVE_POINTER_MATCH_COUNT <> 1) THEN
+        RAISE E_ACTIVE_INVARIANT;
+    END IF;
+
+    IF (V_ACTIVE_VERSION = '{names.version}') THEN
+        RAISE E_SAME_AS_ACTIVE;
+    END IF;
+
+    IF (V_CANDIDATE_VERSION IS NOT NULL AND V_CANDIDATE_VERSION <> '{names.version}') THEN
+        RAISE E_CANDIDATE_CONFLICT;
+    END IF;
+
+    V_OTHER_DEPLOYED_COUNT := (
+        SELECT COUNT(*)
+        FROM CONTROL.DATASET_VERSION
+        WHERE DATASET_ID = '{names.dataset_key}'
+          AND UPPER(COALESCE(STATUS, '')) = 'DEPLOYED'
+          AND VERSION <> '{names.version}'
+    );
+    IF (V_OTHER_DEPLOYED_COUNT > 0) THEN
+        RAISE E_CANDIDATE_CONFLICT;
+    END IF;
+
+    V_INCOMING_STATUS := (
+        SELECT MAX(STATUS)
+        FROM CONTROL.DATASET_VERSION
+        WHERE DATASET_ID = '{names.dataset_key}'
+          AND VERSION = '{names.version}'
+    );
+    IF (UPPER(COALESCE(V_INCOMING_STATUS, 'DEPLOYED')) IN ('ACTIVE', 'RETIRED')) THEN
+        RAISE E_VERSION_STATE_CONFLICT;
+    END IF;
+END;
+$$;
+"""
+
+
 def render_register_sql(pattern: str, names: PipelineNames, *, owner: str, candidate: bool) -> str:
     if pattern == "scd2":
         published = names.published_current or ""
@@ -71,7 +155,8 @@ def render_register_sql(pattern: str, names: PipelineNames, *, owner: str, candi
         primary_runtime = apply_value
     else:
         primary_runtime = "NULL"
-    return f"""-- Register operational identity. This does not route transformation logic.
+    guard = _candidate_registration_guard(names) + "\n" if candidate else ""
+    return f"""{guard}-- Register operational identity. This does not route transformation logic.
 -- PATTERN belongs to the logical dataset; EXECUTION_MODEL belongs to this implementation version.
 MERGE INTO CONTROL.DATASET D
 USING (
@@ -185,83 +270,3 @@ def render_version_yaml(names: PipelineNames, *, candidate: bool, execution: Ver
         candidate=candidate,
         execution=execution,
     )
-
-
-def _published_replacement(pattern: str, names: PipelineNames) -> str:
-    if pattern == "scd2":
-        assert names.history_relation and names.published_history and names.published_current
-        return f"""CREATE OR REPLACE VIEW {names.published_history} COPY GRANTS AS
-SELECT * FROM {names.history_relation};
-
-CREATE OR REPLACE VIEW {names.published_current} COPY GRANTS AS
-SELECT * FROM {names.history_relation}
-WHERE IS_ACTIVE = TRUE;"""
-    assert names.physical_relation and names.published_relation
-    return f"""CREATE OR REPLACE VIEW {names.published_relation} COPY GRANTS AS
-SELECT * FROM {names.physical_relation};"""
-
-
-def _prepare_runtime(names: PipelineNames) -> str:
-    if names.execution_model == "stream_task":
-        if names.stream and names.task:
-            return f"""-- Candidate processing is started before publication. If publication later fails,
--- the previous implementation still serves consumers and continues processing.
-ALTER TASK {names.task} RESUME;
-"""
-        return "-- Stream/Task implementation has no automatic readiness schedule; ensure candidate data is current before publication.\n"
-    if names.execution_model == "dynamic_table":
-        assert names.dynamic_table
-        return f"""-- Force a candidate refresh before switching the stable consumer view.
--- TARGET_LAG remains a best-effort staleness target rather than a release gate.
-ALTER DYNAMIC TABLE {names.dynamic_table} REFRESH;
-"""
-    if names.execution_model == "batch_sql":
-        return "-- Batch SQL implementation has no scheduler. Run its reviewed apply/validate path before publication.\n"
-    return "-- Custom implementation: complete the domain-owned readiness action before publication.\n"
-
-
-def _retire_runtime(names: PipelineNames) -> str:
-    if names.execution_model == "stream_task" and names.task:
-        return f"ALTER TASK {names.task} SUSPEND;"
-    if names.execution_model == "dynamic_table" and names.dynamic_table:
-        return f"ALTER DYNAMIC TABLE {names.dynamic_table} SUSPEND;"
-    if names.execution_model == "batch_sql":
-        return "-- Batch SQL implementation has no scheduler to suspend."
-    return "-- Custom implementation: retire the domain-owned runtime explicitly."
-
-
-def render_release_sql(pattern: str, names_from: PipelineNames, names_to: PipelineNames) -> tuple[str, str]:
-    if pattern == "custom":
-        raise ValueError("custom pipelines require domain-authored activation and rollback SQL")
-
-    def script(old: PipelineNames, new: PipelineNames) -> str:
-        prepare_new = _prepare_runtime(new)
-        publish_sql = _published_replacement(pattern, new)
-        retire_old = _retire_runtime(old)
-        return f"""-- Explicit cutover: {new.dataset_key} {old.version} ({old.execution_model}) -> {new.version} ({new.execution_model})
--- Review VERSION_VALIDATION and candidate DQ evidence before running. This file is never auto-executed by scaffold.
--- Stable consumer views use COPY GRANTS so explicit non-OWNERSHIP privileges survive replacement.
--- Snowflake DDL commits independently. If a later step fails, keep the old runtime available, inspect state,
--- and use the generated rollback/corrective operation rather than blindly retrying partial cutover SQL.
-
-{prepare_new}
-{publish_sql}
-
-UPDATE CONTROL.DATASET_VERSION
-SET STATUS = 'ACTIVE', ACTIVATED_AT = CURRENT_TIMESTAMP(), RETIRED_AT = NULL, UPDATED_AT = CURRENT_TIMESTAMP()
-WHERE DATASET_ID = '{new.dataset_key}' AND VERSION = '{new.version}';
-
-UPDATE CONTROL.DATASET
-SET ACTIVE_VERSION = '{new.version}', CANDIDATE_VERSION = NULL, UPDATED_AT = CURRENT_TIMESTAMP()
-WHERE DATASET_ID = '{new.dataset_key}';
-
-UPDATE CONTROL.DATASET_VERSION
-SET STATUS = 'RETIRED', RETIRED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP()
-WHERE DATASET_ID = '{new.dataset_key}' AND VERSION = '{old.version}';
-
--- Retire old processing last. An earlier publication/control failure must not stop the
--- previously active implementation as its first side effect.
-{retire_old}
-"""
-
-    return script(names_from, names_to), script(names_to, names_from)
