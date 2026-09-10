@@ -11,6 +11,7 @@ from enterprise_snowflake_framework.certification_project import (
 )
 from enterprise_snowflake_framework.certification_snowflake import (
     CERT_DATABASE,
+    CERT_READER_ROLE,
     CERT_ROLE,
     CERT_USER,
     CERT_WAREHOUSE,
@@ -40,7 +41,15 @@ class SnowflakeCertificationContractTests(unittest.TestCase):
             self.assertIn(step, scd1)
 
         scd2 = fixture["datasets"]["scd2_customer"]["events"]
-        for step in ("initial", "update", "later_update", "late_arrival", "delete", "reinsert"):
+        for step in (
+            "initial",
+            "update",
+            "later_update",
+            "late_arrival",
+            "delete",
+            "reinsert",
+            "candidate_catchup",
+        ):
             self.assertIn(step, scd2)
 
         full_refresh = fixture["datasets"]["full_reference"]["snapshots"]
@@ -77,6 +86,7 @@ class SnowflakeCertificationContractTests(unittest.TestCase):
             "SNOWFLAKE_WAREHOUSE": CERT_WAREHOUSE,
         }
         _required_environment(good)
+        self.assertEqual("AR_FRAMEWORK_CERT_READER", CERT_READER_ROLE)
         for key in tuple(good):
             bad = dict(good)
             bad[key] = "PROD_TRANSPORT"
@@ -124,7 +134,9 @@ class SnowflakeCertificationContractTests(unittest.TestCase):
             '"EXECUTE_TASK"',
             "late_arriving_history",
             "candidate_v2_bootstrap",
+            "candidate_v2_catch_up",
             "published_view_grants",
+            "cert_reader_role",
             "cutover",
             "rollback",
             "CONTROL.VERSION_VALIDATION",
