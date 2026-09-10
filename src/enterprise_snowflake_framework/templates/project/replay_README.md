@@ -4,22 +4,35 @@ Replay means the required source evidence is already correct in Bronze and Silve
 
 Typical reasons:
 
-- corrected SCD logic
+- corrected transformation logic
 - candidate-version rebuild
-- transformation defect
 - controlled reprocessing of a known time/key range
 
-Preferred repair path for production Silver defects:
+Preferred production repair path:
 
 ```text
 active version remains serving
+  -> scaffold/deploy candidate
   -> generate/review candidate repair SQL
-  -> build candidate from Bronze
+  -> bootstrap/replay candidate from Bronze
   -> catch up
   -> compare / validate
+  -> explicit release SQL
   -> activate candidate
 ```
 
-Do not use replay to hide missing Bronze data. If Bronze is incomplete, use a backfill/ingestion repair first.
+Standard pattern replay semantics are intentionally different:
 
-Framework repair automation should generate explicit SQL/scripts for review. Engineers execute approved repair SQL; project initialization never runs replay automatically.
+```text
+append       -> idempotent event replay
+scd1         -> current-state rebuild/merge from ordered Bronze evidence
+scd2         -> affected-key history rebuild
+full_refresh -> complete current Bronze snapshot rebuild
+custom       -> domain-authored
+```
+
+For a newly created empty candidate, prefer a full bootstrap with no time bounds. A bounded replay assumes the candidate already has a correct baseline outside that range. Full-refresh does not support time-range replay.
+
+Do not use replay to hide missing Bronze data. If Bronze is incomplete, repair/backfill ingestion first.
+
+`esf repair-sql` generates explicit candidate-only SQL/scripts for review. Engineers execute approved repair SQL; project initialization never runs replay automatically.
