@@ -9,6 +9,7 @@ Provision the dedicated certification boundary described in `docs/architecture/S
 ```text
 CI_FRAMEWORK_CERT
 AR_FRAMEWORK_CERT
+AR_FRAMEWORK_CERT_READER
 SU_GITHUB_FRAMEWORK_CERT
 WH_FRAMEWORK_CERT_TRANSFORM
 GitHub Environment: snowflake-certification
@@ -21,7 +22,7 @@ SNOWFLAKE_ACCOUNT
 SNOWFLAKE_OIDC_AUDIENCE
 ```
 
-Keep `ESF_SNOWFLAKE_CERTIFICATION_ENABLED` unset/false until the Snowflake and GitHub environment controls are ready.
+Keep the **repository Actions variable** `ESF_SNOWFLAKE_CERTIFICATION_ENABLED` unset/false until the Snowflake and GitHub environment controls are ready.
 
 ## First run
 
@@ -39,7 +40,7 @@ Only after the exact SHA reports `CERTIFIED` should release notes call that Fram
 
 ## Automatic post-main certification
 
-After the manual run is proven and environment protection is in place, set:
+After the manual run is proven and environment protection is in place, set this **repository Actions variable**:
 
 ```text
 ESF_SNOWFLAKE_CERTIFICATION_ENABLED=true
@@ -62,6 +63,8 @@ dynamic_table   NOT_APPLICABLE until implemented
 ```
 
 The certification runner creates a temporary domain repository with the same public scaffold/version APIs that a domain engineer uses, then deploys it through the real apply-once migration CLI.
+
+`AR_FRAMEWORK_CERT_READER` is a deliberately separate, pre-provisioned account role used only as the consumer-grant probe. The certification owner role grants `SELECT` on the stable published view to this role, then verifies that the explicit grant survives generated cutover and rollback via `COPY GRANTS`.
 
 ## Failure handling
 
