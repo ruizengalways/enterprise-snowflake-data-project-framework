@@ -116,6 +116,8 @@ datasets:
         - {id: '1', value: D, source_updated_at: '2026-01-03 14:00:00', source_sequence: 5, source_operation: D, ingested_at: '2026-01-03 14:00:05 +00:00'}
       reinsert:
         - {id: '1', value: E, source_updated_at: '2026-01-03 15:00:00', source_sequence: 6, source_operation: I, ingested_at: '2026-01-03 15:00:05 +00:00'}
+      candidate_catchup:
+        - {id: '2', value: F, source_updated_at: '2026-01-03 16:00:00', source_sequence: 1, source_operation: I, ingested_at: '2026-01-03 16:00:05 +00:00'}
 
   full_reference:
     pattern: full_refresh
