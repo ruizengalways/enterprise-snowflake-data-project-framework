@@ -23,6 +23,8 @@ Existing domain-owned pipelines are not renamed automatically.
 
 `ingestion/` is an integration boundary and example area. Projects may use Openflow, Snowpipe, Kafka connectors, external ETL/orchestrators or project-specific API ingestion. The framework does not implement a universal ingestion runtime or mature connector checkpoint engines.
 
+Control migration 060 adds a small optional ingestion run-evidence API (`BEGIN_INGESTION_RUN`, `COMPLETE_INGESTION_RUN`, `FAIL_INGESTION_RUN`). It records operational evidence only; managed connectors remain authoritative for offsets/checkpoints and source-specific execution.
+
 ## Bronze -> Silver
 
 This is the framework's primary standardization area.
@@ -37,13 +39,33 @@ Standard patterns remain append, full_refresh, scd1, scd2 and custom. Pattern al
 
 New dataset starters include `pipeline.yml`, `version.yml`, explicit object/apply/replay/validation/task/register/publish SQL, `060_policy.sql`, and a deploy-manifest fragment.
 
+Generated standard apply procedures write RUNNING/SUCCESS/FAILED evidence to `CONTROL.PIPELINE_RUN`.
+
 ## Domain-local control plane
 
 Each domain owns its own `CONTROL` schema. Do not create one shared writable `PLATFORM_CONTROL` database across all domains.
 
 The domain control plane includes dataset/version identity, SLA policy, ingestion/pipeline/dbt run evidence, health state, incidents, version validation and repair audit. Enterprise health dashboards may union stable read-only health views from each domain.
 
+Logical dataset lifecycle is explicit: `ACTIVE`, `PAUSED`, `DECOMMISSIONED`.
+
 Control-plane upgrades remain explicit. Rerunning `init-project` creates newly introduced missing control files without overwriting existing files or the domain-owned deploy manifest. `esf control-plan` reports repo/manifest gaps for review.
+
+## Run evidence
+
+Operational health is driven by three stage ledgers:
+
+```text
+source-specific ingestion -> CONTROL.INGESTION_RUN
+Silver apply procedure    -> CONTROL.PIPELINE_RUN
+dbt model result          -> CONTROL.DBT_RUN
+```
+
+New dbt projects include an `on-run-end` macro using dbt's Result context. A model only participates in one logical dataset's Gold health when it explicitly declares `config.meta.esf_dataset_id`. Cross-dataset business marts should normally remain unmapped.
+
+The dbt macro records status, execution time, invocation/resource identity, immutable project Git SHA when available, and latest successful Silver data time. It does not infer a Gold business-event timestamp.
+
+Existing domain repos are not silently opted into dbt logging: rerunning `init-project` can add the macro/readme, but it never rewrites an existing `dbt_project.yml`.
 
 ## SCD2 default
 
@@ -77,9 +99,9 @@ Use `esf sla-sql` to generate a new reviewable policy revision under `operations
 
 Use `esf lifecycle-sql` to generate explicit lifecycle SQL. The command never connects to Snowflake and never executes the generated script.
 
-`pause` and `resume` require an explicit version so the Framework never guesses the active implementation from repository state. The generated script changes the explicit Task plus `CONTROL.DATASET.ENABLED`, then refreshes domain health.
+`pause` and `resume` require an explicit version so the Framework never guesses the active implementation from repository state. The generated script changes the explicit Task plus logical-dataset lifecycle state, then refreshes domain health.
 
-`decommission` is intentionally soft: suspend all known implementation Tasks, disable the logical dataset and mark versions retired while preserving published data, Bronze/Silver history and control-plane audit evidence. It does not generate executable DROP statements.
+`decommission` is intentionally soft: suspend all known implementation Tasks, disable the logical dataset, mark it `DECOMMISSIONED`, and retire versions while preserving published data, Bronze/Silver history and control-plane audit evidence. It does not generate executable DROP statements.
 
 Physical cleanup is a separate approved retention/governance change. New domain repositories include a staged `docs/DOMAIN_DECOMMISSION.md` runbook covering source ingestion shutdown, consumer cutover, retention, infrastructure cleanup and repository archive/removal decisions.
 
@@ -99,6 +121,6 @@ These remain exploratory domain work. The framework keeps skeletons/examples but
 
 ## Architectural guardrails
 
-Continue to reject deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, hidden active-version switching, automatic production repair execution, automatic SLA threshold inference, one-click destructive decommission and automatic business Mart/KPI/Semantic generation.
+Continue to reject deployment-time scaffolding, runtime metadata routing, metadata -> runtime transformation SQL generation, central generic SCD runtime engines, universal ingestion orchestration, connector offset/checkpoint ownership, hidden active-version switching, automatic production repair execution, automatic SLA threshold inference, one-click destructive decommission and automatic business Mart/KPI/Semantic generation.
 
-The control plane may centralize operational health/version/incident/lifecycle logic inside a domain, but must not hide dataset transformation behavior.
+The control plane may centralize operational health/version/incident/lifecycle/run-evidence logic inside a domain, but must not hide dataset transformation behavior.

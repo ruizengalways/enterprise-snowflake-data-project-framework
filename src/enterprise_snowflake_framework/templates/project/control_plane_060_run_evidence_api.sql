@@ -1,0 +1,106 @@
+-- Stable operational run-evidence interfaces for source-specific ingestion and dbt.
+-- These procedures record evidence only. They do not orchestrate connectors, route transformations,
+-- manage Kafka offsets, manage CDC checkpoints, or decide when a dataset should run.
+
+ALTER TABLE CONTROL.DBT_RUN ADD COLUMN IF NOT EXISTS INVOCATION_ID VARCHAR;
+ALTER TABLE CONTROL.DBT_RUN ADD COLUMN IF NOT EXISTS RESOURCE_UNIQUE_ID VARCHAR;
+
+CREATE OR REPLACE PROCEDURE CONTROL.BEGIN_INGESTION_RUN(
+    P_RUN_ID VARCHAR,
+    P_DATASET_ID VARCHAR,
+    P_SOURCE_ID VARCHAR,
+    P_INGESTION_TYPE VARCHAR,
+    P_EXTERNAL_RUN_ID VARCHAR,
+    P_SOURCE_MIN_TIMESTAMP TIMESTAMP_LTZ,
+    P_SOURCE_MAX_TIMESTAMP TIMESTAMP_LTZ
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS OWNER
+AS
+$$
+BEGIN
+    INSERT INTO CONTROL.INGESTION_RUN (
+        RUN_ID,
+        DATASET_ID,
+        SOURCE_ID,
+        INGESTION_TYPE,
+        STATUS,
+        STARTED_AT,
+        SOURCE_MIN_TIMESTAMP,
+        SOURCE_MAX_TIMESTAMP,
+        EXTERNAL_RUN_ID
+    )
+    SELECT
+        :P_RUN_ID,
+        :P_DATASET_ID,
+        :P_SOURCE_ID,
+        :P_INGESTION_TYPE,
+        'RUNNING',
+        CURRENT_TIMESTAMP(),
+        :P_SOURCE_MIN_TIMESTAMP,
+        :P_SOURCE_MAX_TIMESTAMP,
+        :P_EXTERNAL_RUN_ID
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM CONTROL.INGESTION_RUN
+        WHERE RUN_ID = :P_RUN_ID
+    );
+
+    RETURN P_RUN_ID;
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE CONTROL.COMPLETE_INGESTION_RUN(
+    P_RUN_ID VARCHAR,
+    P_BRONZE_PUBLISHED_AT TIMESTAMP_LTZ,
+    P_ROWS_RECEIVED NUMBER
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS OWNER
+AS
+$$
+BEGIN
+    UPDATE CONTROL.INGESTION_RUN
+    SET
+        STATUS = 'SUCCESS',
+        COMPLETED_AT = CURRENT_TIMESTAMP(),
+        BRONZE_PUBLISHED_AT = :P_BRONZE_PUBLISHED_AT,
+        ROWS_RECEIVED = :P_ROWS_RECEIVED,
+        ERROR_CODE = NULL,
+        ERROR_MESSAGE = NULL
+    WHERE RUN_ID = :P_RUN_ID
+      AND STATUS = 'RUNNING';
+
+    RETURN P_RUN_ID;
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE CONTROL.FAIL_INGESTION_RUN(
+    P_RUN_ID VARCHAR,
+    P_ERROR_CODE VARCHAR,
+    P_ERROR_MESSAGE VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS OWNER
+AS
+$$
+BEGIN
+    UPDATE CONTROL.INGESTION_RUN
+    SET
+        STATUS = 'FAILED',
+        COMPLETED_AT = CURRENT_TIMESTAMP(),
+        ERROR_CODE = :P_ERROR_CODE,
+        ERROR_MESSAGE = :P_ERROR_MESSAGE
+    WHERE RUN_ID = :P_RUN_ID
+      AND STATUS = 'RUNNING';
+
+    RETURN P_RUN_ID;
+END;
+$$;
+
+-- The dbt on-run-end macro writes CONTROL.DBT_RUN directly because dbt already exposes
+-- one Result object per model execution. Keeping this as an INSERT rather than a generic
+-- runtime procedure preserves the model/dataset mapping in normal domain-owned dbt source.

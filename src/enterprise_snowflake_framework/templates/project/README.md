@@ -19,6 +19,16 @@ This applies to dataset roots, candidate `versions/vN/` directories and generate
 
 This project owns a domain-local control plane under `control_plane/`. The committed SQL creates this domain's `CONTROL` schema, operational ledgers, version/SLA state, health evaluation, incident lifecycle and dashboard-ready views. It is not a shared global runtime database.
 
+Operational evidence follows one domain contract:
+
+```text
+source-specific ingestion -> CONTROL.INGESTION_RUN
+Silver apply procedure    -> CONTROL.PIPELINE_RUN
+dbt model result          -> CONTROL.DBT_RUN
+```
+
+See `ingestion/RUN_EVIDENCE.md` and `dbt/README.md`. Ingestion remains source-specific; the ledger API does not replace Openflow, Snowpipe, Kafka, Talend, ADF or project-specific ingestion.
+
 Start with:
 
 ```bash
