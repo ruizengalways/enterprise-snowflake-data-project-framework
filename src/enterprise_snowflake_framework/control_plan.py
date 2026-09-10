@@ -65,9 +65,7 @@ def build_control_plan(project_root: Path) -> ControlPlan:
     missing_manifest = tuple(path for path in present if path not in entries)
     unknown = tuple(path for path in entries if path not in KNOWN_CONTROL_SQL)
     counts = Counter(entries)
-    duplicates = tuple(path for path in entries if counts[path] > 1 and entries.index(path) == entries.index(path))
-    # Preserve first-seen manifest order while reporting each duplicate only once.
-    duplicates = tuple(dict.fromkeys(duplicates))
+    duplicates = tuple(dict.fromkeys(path for path in entries if counts[path] > 1))
     known_entries = tuple(path for path in entries if path in KNOWN_CONTROL_SQL)
     return ControlPlan(
         manifest=manifest,
