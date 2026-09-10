@@ -80,7 +80,8 @@ class PatternRepairCoverageTests(unittest.TestCase):
     def test_append_has_deterministic_candidate_replay_and_repair_script(self) -> None:
         v1 = self._dataset("events", "append")
         replay = (v1 / "015_replay.sql").read_text(encoding="utf-8")
-        self.assertIn("CREATE OR REPLACE PROCEDURE SILVER.REPLAY_FLEET_MSSQL_EVENTS_V1", replay)
+        self.assertIn("CREATE PROCEDURE SILVER.REPLAY_FLEET_MSSQL_EVENTS_V1", replay)
+        self.assertNotIn("CREATE OR REPLACE PROCEDURE SILVER.REPLAY_", replay)
         self.assertIn("DELETE FROM SILVER.FLEET_MSSQL_EVENTS_V1", replay)
         self.assertIn("NOT EXISTS", replay)
         self.assertIn("CONTROL.REPAIR_RUN", replay)
@@ -102,7 +103,8 @@ class PatternRepairCoverageTests(unittest.TestCase):
     def test_scd1_replay_recomputes_current_state_from_ordered_bronze(self) -> None:
         v1 = self._dataset("customer", "scd1")
         replay = (v1 / "015_replay.sql").read_text(encoding="utf-8")
-        self.assertIn("CREATE OR REPLACE PROCEDURE SILVER.REPLAY_FLEET_MSSQL_CUSTOMER_V1", replay)
+        self.assertIn("CREATE PROCEDURE SILVER.REPLAY_FLEET_MSSQL_CUSTOMER_V1", replay)
+        self.assertNotIn("CREATE OR REPLACE PROCEDURE SILVER.REPLAY_", replay)
         self.assertIn("DELETE FROM SILVER.FLEET_MSSQL_CUSTOMER_V1", replay)
         self.assertIn("MERGE INTO SILVER.FLEET_MSSQL_CUSTOMER_V1", replay)
         self.assertIn("ROW_NUMBER() OVER", replay)
@@ -125,7 +127,8 @@ class PatternRepairCoverageTests(unittest.TestCase):
     def test_full_refresh_repair_is_snapshot_rebuild_and_rejects_ranges(self) -> None:
         v1 = self._dataset("reference_codes", "full_refresh")
         replay = (v1 / "015_replay.sql").read_text(encoding="utf-8")
-        self.assertIn("CREATE OR REPLACE PROCEDURE SILVER.REPLAY_FLEET_MSSQL_REFERENCE_CODES_V1()", replay)
+        self.assertIn("CREATE PROCEDURE SILVER.REPLAY_FLEET_MSSQL_REFERENCE_CODES_V1()", replay)
+        self.assertNotIn("CREATE OR REPLACE PROCEDURE SILVER.REPLAY_", replay)
         self.assertIn("INSERT OVERWRITE INTO SILVER.FLEET_MSSQL_REFERENCE_CODES_V1", replay)
         self.assertIn("current Bronze snapshot", replay)
         self.assertNotIn("P_FROM TIMESTAMP_NTZ", replay)
@@ -152,6 +155,8 @@ class PatternRepairCoverageTests(unittest.TestCase):
     def test_scd2_replay_keeps_affected_key_history_rebuild(self) -> None:
         v1 = self._dataset("account", "scd2")
         replay = (v1 / "015_replay.sql").read_text(encoding="utf-8")
+        self.assertIn("CREATE PROCEDURE SILVER.REPLAY_FLEET_MSSQL_ACCOUNT_V1", replay)
+        self.assertNotIn("CREATE OR REPLACE PROCEDURE SILVER.REPLAY_", replay)
         self.assertIn("ESF_AFFECTED_KEYS", replay)
         self.assertIn("DELETE FROM SILVER.FLEET_MSSQL_ACCOUNT_V1_EVENTS", replay)
         self.assertIn("SILVER.FLEET_MSSQL_ACCOUNT_V1_HISTORY", replay)

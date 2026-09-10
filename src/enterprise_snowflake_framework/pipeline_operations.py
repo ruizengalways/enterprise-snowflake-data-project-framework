@@ -16,9 +16,11 @@ def render_task_sql(pattern: str, names: PipelineNames, project_code: str) -> st
         else "-- No readiness signal is assumed. Add SCHEDULE/AFTER/control-event wiring before activation."
     )
     return f"""{readiness}
+-- This version owns a new task name. CREATE is intentionally fail-closed: an unexpected
+-- pre-existing task is an ownership conflict and must not be silently replaced or suspended.
 -- Snowflake creates new tasks suspended. Validation and activation are explicit.
 -- One task run applies the transformation and then records dataset-local structural DQ evidence.
-CREATE OR REPLACE TASK {names.task}
+CREATE TASK {names.task}
     WAREHOUSE = WH_{project_code}_TRANSFORM{when}
 AS
 BEGIN
@@ -128,17 +130,21 @@ def render_publish_sql(pattern: str, names: PipelineNames, *, candidate: bool) -
         )
     if pattern == "scd2":
         assert names.history_relation and names.published_history and names.published_current
-        return f"""CREATE OR REPLACE VIEW {names.published_history} AS
+        return f"""-- Initial publication is create-only. If the stable name unexpectedly exists,
+-- fail rather than replace an object whose ownership or grants are unknown.
+CREATE VIEW {names.published_history} AS
 SELECT *
 FROM {names.history_relation};
 
-CREATE OR REPLACE VIEW {names.published_current} AS
+CREATE VIEW {names.published_current} AS
 SELECT *
 FROM {names.history_relation}
 WHERE IS_ACTIVE = TRUE;
 """
     assert names.physical_relation and names.published_relation
-    return f"""CREATE OR REPLACE VIEW {names.published_relation} AS
+    return f"""-- Initial publication is create-only. If the stable name unexpectedly exists,
+-- fail rather than replace an object whose ownership or grants are unknown.
+CREATE VIEW {names.published_relation} AS
 SELECT *
 FROM {names.physical_relation};
 """
@@ -173,46 +179,44 @@ def render_version_yaml(names: PipelineNames, *, candidate: bool) -> str:
     )
 
 
+def _published_replacement(pattern: str, names: PipelineNames) -> str:
+    if pattern == "scd2":
+        assert names.history_relation and names.published_history and names.published_current
+        return f"""CREATE OR REPLACE VIEW {names.published_history} COPY GRANTS AS
+SELECT * FROM {names.history_relation};
+
+CREATE OR REPLACE VIEW {names.published_current} COPY GRANTS AS
+SELECT * FROM {names.history_relation}
+WHERE IS_ACTIVE = TRUE;"""
+    assert names.physical_relation and names.published_relation
+    return f"""CREATE OR REPLACE VIEW {names.published_relation} COPY GRANTS AS
+SELECT * FROM {names.physical_relation};"""
+
+
 def render_release_sql(pattern: str, names_from: PipelineNames, names_to: PipelineNames) -> tuple[str, str]:
     if pattern == "custom":
         raise ValueError("custom pipelines require domain-authored activation and rollback SQL")
-    if pattern == "scd2":
-        assert names_from.history_relation and names_to.history_relation
-        assert names_to.published_history and names_to.published_current
-        publish_to = f"""CREATE OR REPLACE VIEW {names_to.published_history} AS
-SELECT * FROM {names_to.history_relation};
 
-CREATE OR REPLACE VIEW {names_to.published_current} AS
-SELECT * FROM {names_to.history_relation}
-WHERE IS_ACTIVE = TRUE;"""
-        publish_from = f"""CREATE OR REPLACE VIEW {names_from.published_history} AS
-SELECT * FROM {names_from.history_relation};
-
-CREATE OR REPLACE VIEW {names_from.published_current} AS
-SELECT * FROM {names_from.history_relation}
-WHERE IS_ACTIVE = TRUE;"""
-    else:
-        assert names_from.physical_relation and names_to.physical_relation
-        assert names_to.published_relation and names_from.published_relation
-        publish_to = f"CREATE OR REPLACE VIEW {names_to.published_relation} AS\nSELECT * FROM {names_to.physical_relation};"
-        publish_from = f"CREATE OR REPLACE VIEW {names_from.published_relation} AS\nSELECT * FROM {names_from.physical_relation};"
-
-    def script(old: PipelineNames, new: PipelineNames, publish_sql: str) -> str:
-        resume_note = (
-            f"ALTER TASK {new.task} RESUME;"
-            if new.stream
-            else f"-- {new.task} has no readiness schedule by default; configure it or use EXECUTE TASK explicitly."
-        )
+    def script(old: PipelineNames, new: PipelineNames) -> str:
+        if new.stream:
+            prepare_new = f"""-- Candidate processing is started before publication. If publication later fails,
+-- the previous implementation still serves consumers and continues processing.
+ALTER TASK {new.task} RESUME;
+"""
+        else:
+            prepare_new = (
+                f"-- {new.task} has no readiness schedule by default. Ensure the candidate snapshot is\n"
+                "-- already rebuilt and validated before publication; no implicit task activation is attempted.\n"
+            )
+        publish_sql = _published_replacement(pattern, new)
         return f"""-- Explicit cutover: {new.dataset_key} {old.version} -> {new.version}
 -- Review VERSION_VALIDATION and candidate DQ evidence before running. This file is never auto-executed by scaffold.
+-- Stable consumer views use COPY GRANTS so explicit non-OWNERSHIP privileges survive replacement.
+-- Snowflake DDL commits independently. If a later step fails, keep the old task running, inspect state,
+-- and use the generated rollback/corrective operation rather than blindly retrying partial cutover SQL.
 
-ALTER TASK {old.task} SUSPEND;
-
+{prepare_new}
 {publish_sql}
-
-UPDATE CONTROL.DATASET_VERSION
-SET STATUS = 'RETIRED', RETIRED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP()
-WHERE DATASET_ID = '{new.dataset_key}' AND VERSION = '{old.version}';
 
 UPDATE CONTROL.DATASET_VERSION
 SET STATUS = 'ACTIVE', ACTIVATED_AT = CURRENT_TIMESTAMP(), RETIRED_AT = NULL, UPDATED_AT = CURRENT_TIMESTAMP()
@@ -222,7 +226,13 @@ UPDATE CONTROL.DATASET
 SET ACTIVE_VERSION = '{new.version}', CANDIDATE_VERSION = NULL, UPDATED_AT = CURRENT_TIMESTAMP()
 WHERE DATASET_ID = '{new.dataset_key}';
 
-{resume_note}
+UPDATE CONTROL.DATASET_VERSION
+SET STATUS = 'RETIRED', RETIRED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP()
+WHERE DATASET_ID = '{new.dataset_key}' AND VERSION = '{old.version}';
+
+-- Retire old processing last. An earlier publication/control failure must not suspend the
+-- previously active pipeline as its first side effect.
+ALTER TASK {old.task} SUSPEND;
 """
 
-    return script(names_from, names_to, publish_to), script(names_to, names_from, publish_from)
+    return script(names_from, names_to), script(names_to, names_from)

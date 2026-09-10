@@ -143,7 +143,8 @@ class DataQualityReconciliationEvidenceTests(unittest.TestCase):
         task_sql = (destination / "030_task.sql").read_text(encoding="utf-8")
         deploy = (destination / "deploy_manifest.fragment.txt").read_text(encoding="utf-8")
 
-        self.assertIn("CREATE OR REPLACE PROCEDURE SILVER.VALIDATE_FLEET_MSSQL_CUSTOMER_V1", validate_sql)
+        self.assertIn("CREATE PROCEDURE SILVER.VALIDATE_FLEET_MSSQL_CUSTOMER_V1", validate_sql)
+        self.assertNotIn("CREATE OR REPLACE PROCEDURE SILVER.VALIDATE_", validate_sql)
         self.assertIn("INSERT INTO CONTROL.DQ_RESULT", validate_sql)
         self.assertIn("multiple_active_rows", validate_sql)
         self.assertIn("null_business_key", validate_sql)
