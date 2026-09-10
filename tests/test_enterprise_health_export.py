@@ -90,6 +90,7 @@ class EnterpriseHealthExportTests(unittest.TestCase):
                 "control_plane/sql/080_data_quality_reconciliation.sql",
                 "control_plane/sql/090_dataset_execution_model.sql",
                 "control_plane/sql/100_dynamic_table_observability.sql",
+                "control_plane/sql/110_pipeline_execution_metrics.sql",
             ),
             plan.missing_from_manifest,
         )
