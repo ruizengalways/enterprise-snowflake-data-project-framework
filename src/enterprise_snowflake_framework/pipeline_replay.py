@@ -287,16 +287,10 @@ def _render_scd2_replay(names: PipelineNames, contract: dict[str, Any]) -> str:
     if not source_timestamp or not ordering or not tracked:
         raise ValueError("scd2 replay requires source_timestamp, ordering columns and tracked columns")
     key_defs = _typed_defs(contract, business_key)
-    changes = contract.get("change_semantics", {})
-    if changes.get("delete_semantics") == "tombstone" and changes.get("operation_column"):
-        op = str(changes["operation_column"]).upper()
-        values = ", ".join(
-            "'" + str(value).replace("'", "''").upper() + "'"
-            for value in changes.get("delete_values", [])
-        )
-        replay_action = f"IFF(UPPER(COALESCE(TO_VARCHAR(B.{op}), '')) IN ({values}), 'DELETE', 'INSERT')"
-    else:
-        replay_action = "'INSERT'"
+    # Replay reads retained Bronze evidence as rows. A source tombstone remains a row
+    # whose delete meaning is carried by the reviewed operation column; it is not a
+    # reconstructed Snowflake physical DELETE event.
+    replay_action = "'INSERT'"
     event_identity = [*idempotency, "ESF_STREAM_ACTION"]
     event_payload = [*columns, "ESF_STREAM_ACTION", "ESF_STREAM_ISUPDATE"]
     new_defs = _column_defs(contract)

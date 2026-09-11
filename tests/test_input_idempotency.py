@@ -108,6 +108,18 @@ class InputIdempotencyTests(unittest.TestCase):
         self.assertIn("RAISE E_IDEMPOTENCY_CONFLICT", sql)
         self.assertLess(sql.index("RAISE E_IDEMPOTENCY_CONFLICT"), sql.index("DELETE FROM SILVER.TRANSPORT_SOURCE_VEHICLE_V1_HISTORY"))
 
+    def test_scd2_tombstone_replay_does_not_invent_a_physical_stream_delete(self) -> None:
+        sql = render_replay_sql("scd2", self._names("scd2"), SCD2_CONTRACT)
+        self.assertIn(
+            "B.INGESTED_AT, 'INSERT', FALSE\n    FROM BRONZE.TRANSPORT_SOURCE_VEHICLE B",
+            sql,
+        )
+        self.assertNotIn("'DELETE', 'INSERT'", sql)
+        self.assertIn(
+            "UPPER(COALESCE(TO_VARCHAR(E.SOURCE_OPERATION), '')) IN ('D')",
+            sql,
+        )
+
     def test_unrelated_patterns_do_not_gain_the_new_batch_identity_guard(self) -> None:
         full_refresh = {
             **APPEND_CONTRACT,
